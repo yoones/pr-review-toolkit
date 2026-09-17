@@ -1,11 +1,11 @@
 {
-  "name": "review-requested-prs",
-  "description": "Review the open PRs awaiting your requested review and leave pending (un-submitted) feedback you finish on the GitHub UI.",
-  "version": "1.0.0",
+  "name": "pr-review-toolkit",
+  "description": "Three Claude Code skills for reviewing pull requests: pr-brief (understand a PR from a reading path), pr-flow (see its mechanism as an interactive diagram), review-requested-prs (draft pending review comments you submit yourself).",
+  "version": "2.0.0",
   "author": {
     "name": "Younes SERRAJ"
   },
-  "homepage": "https://github.com/yoones/review-requested-prs",
+  "homepage": "https://github.com/yoones/pr-review-toolkit",
   "license": "MIT",
-  "keywords": ["code-review", "github", "pull-requests", "pending-review"]
+  "keywords": ["code-review", "github", "pull-requests", "pending-review", "diff", "diagram"]
 }

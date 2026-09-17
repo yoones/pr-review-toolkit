@@ -1,7 +1,6 @@
 ---
 name: review-requested-prs
-description: Review the open PRs awaiting my requested review and leave pending (un-submitted) feedback I finish on the UI.
-trigger: When the user wants to go through the PRs they've been requested to review and drop pending review comments, across one or several repos.
+description: Review the open PRs awaiting my requested review and leave pending (un-submitted) feedback I finish on the UI. Use when going through the PRs I have been requested to review, across one or several repos.
 ---
 
 # Review-Requested PRs Skill

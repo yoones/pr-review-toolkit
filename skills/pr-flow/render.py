@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+"""Render a PR flow spec (JSON) into a self-contained interactive HTML page.
+
+    python3 render.py flow.json out.html
+
+The page is a left-to-right SVG diagram (columns of nodes, labelled edges) where every
+node opens a modal carrying the code it stands for: diff hunks (verbatim) and out-of-diff
+excerpts with highlighted lines. Layout is computed here — the JSON carries content, not
+coordinates. See SKILL.md for the JSON shape.
+"""
+
+import hashlib
+import html
+import json
+import re
+import sys
+
+HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+
+X0, COL_GAP, Y0 = 20, 50, 44
+NODE_GAP, PAD = 10, 10
+LINE_H, TITLE_H = 14, 18
+
+
+def esc(value):
+    return html.escape("" if value is None else str(value), quote=True)
+
+
+def rich(value):
+    """Escape, then turn `backticked` spans into inline code (HTML parts only)."""
+    return INLINE_CODE_RE.sub(r"<code>\1</code>", esc(value))
+
+
+def as_list(value):
+    if value is None:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
+# Default accent tones. `a`/`b`/`c` are the paths a diagram traces; `off` is "nothing
+# happens"; `note` is an aside; `band` a full-width strip; `plain` a neutral node.
+DEFAULT_TONES = {
+    "a": {"light": ("#0e6f8e", "#e3f1f6"), "dark": ("#57b8d6", "#143743")},
+    "b": {"light": ("#6f3f9e", "#efe7f7"), "dark": ("#b48ce0", "#2e2240")},
+    "c": {"light": ("#a3541a", "#fbeadb"), "dark": ("#e8a06a", "#3e2a1a")},
+}
+
+
+class Flow:
+    def __init__(self, data):
+        self.d = data
+        self.repo = str(data.get("repo", ""))
+        self.head = str(data.get("head_sha", ""))
+        self.pr_url = str(data.get("url", ""))
+        self.tones = {}
+        for key, base in DEFAULT_TONES.items():
+            self.tones[key] = dict(base)
+        for key, spec in (data.get("tones") or {}).items():
+            self.tones.setdefault(key, dict(DEFAULT_TONES.get(key, DEFAULT_TONES["a"])))
+            self.tones[key].update(spec or {})
+        self.columns = data.get("columns") or []
+        self.nodes = data.get("nodes") or []
+        self.edges = data.get("edges") or []
+        self.layout()
+
+    # ---------------------------------------------------------------- layout
+    def layout(self):
+        x = X0
+        self.col_x, self.col_w = {}, {}
+        for col in self.columns:
+            w = int(col.get("width") or 280)
+            self.col_x[col["id"]], self.col_w[col["id"]] = x, w
+            x += w + COL_GAP
+        self.total_w = x - COL_GAP + X0
+
+        cursor = {c["id"]: Y0 for c in self.columns}
+        self.rect = {}
+        for node in self.nodes:
+            lines = node.get("lines") or []
+            h = int(node.get("height") or max(40, PAD + TITLE_H + LINE_H * len(lines) + 8))
+            col = node.get("col")
+            if col == "*":
+                nx, nw = X0, self.total_w - 2 * X0
+                y = node.get("y")
+                if y is None:
+                    y = max(cursor.values()) + 30
+                y = int(y)
+                for key in cursor:
+                    cursor[key] = y + h + NODE_GAP
+            else:
+                nx, nw = self.col_x[col], self.col_w[col]
+                if node.get("span"):
+                    ids = [c["id"] for c in self.columns]
+                    last = ids[min(len(ids) - 1, ids.index(col) + int(node["span"]) - 1)]
+                    nw = self.col_x[last] + self.col_w[last] - nx
+                y = node.get("y")
+                if y is None:
+                    y = cursor[col] + int(node.get("gap") or 0)
+                y = int(y)
+                cursor[col] = y + h + NODE_GAP
+            self.rect[node["id"]] = (nx, y, nw, h)
+        bottom = max((r[1] + r[3] for r in self.rect.values()), default=Y0)
+        self.legend_y = bottom + 34
+        self.total_h = self.legend_y + 14
+
+    # ---------------------------------------------------------------- svg
+    def svg_node(self, node):
+        x, y, w, h = self.rect[node["id"]]
+        tone = node.get("tone") or "plain"
+        cls = f"box {esc(tone)}" if tone != "plain" else "box"
+        has_modal = bool(node.get("blocks")) or bool(node.get("intro"))
+        cue = node.get("cue") or ("diff" if any(b.get("kind") == "diff" for b in node.get("blocks") or []) else "code")
+        out = [f'<rect class="{cls}" x="{x}" y="{y}" width="{w}" height="{h}"/>']
+        ty = y + PAD + 6
+        title_cls = "t sans" if node.get("sans") else "t"
+        if tone == "off":
+            title_cls += " off"
+        out.append(f'<text class="{title_cls}" x="{x + 10}" y="{ty}">{esc(node.get("title"))}</text>')
+        ty += TITLE_H - 2
+        for line in node.get("lines") or []:
+            if isinstance(line, str):
+                line = {"text": line}
+            style = line.get("style") or "code"
+            lcls = {"code": "", "sub": "sub", "lab": f"lab {esc(tone)}" if tone in self.tones else "lab",
+                    "sans": "sub sans", "text": "sans"}.get(style, "")
+            out.append(f'<text class="{lcls}" x="{x + 10}" y="{ty}">{esc(line.get("text"))}</text>')
+            ty += LINE_H
+        if has_modal:
+            out.append(f'<text class="cue" x="{x + w - 8}" y="{y + 12}" text-anchor="end">{esc(cue)} ›</text>')
+            label = esc(node.get("modal_title") or node.get("title"))
+            return (f'<g class="node" data-node="{esc(node["id"])}" tabindex="0" role="button" '
+                    f'aria-label="Ouvrir le code : {label}">{"".join(out)}</g>')
+        return f'<g>{"".join(out)}</g>'
+
+    def svg_edge(self, edge):
+        a = self.rect[edge["from"]]
+        tone = edge.get("tone") or "k"
+        kind = edge.get("kind") or "solid"
+        ax, ay, aw, ah = a
+        label = edge.get("label")
+        parts = []
+        if kind == "none":
+            sy = ay + ah // 2
+            sx = ax + aw
+            parts.append(f'<path class="edge off" d="M{sx} {sy} H{sx + 62}"/>')
+            parts.append(f'<circle class="nil" cx="{sx + 72}" cy="{sy}" r="6"/>'
+                         f'<line class="nil" x1="{sx + 68}" y1="{sy + 4}" x2="{sx + 76}" y2="{sy - 4}"/>')
+            if label:
+                parts.append(f'<text class="lab off" x="{sx + 84}" y="{sy + 4}">{esc(label)}</text>')
+            return "".join(parts)
+
+        b = self.rect[edge["to"]]
+        bx, by, bw, bh = b
+        cls = f"edge {esc(tone)}" + (" dash" if kind == "dash" else "")
+        marker = f"url(#a-{esc(tone)})"
+        if ax + aw <= bx:  # left -> right
+            sx, sy = ax + aw, ay + ah // 2
+            ty = min(max(sy, by + 12), by + bh - 12)
+            ty = int(edge.get("to_y", ty))
+            ex = bx
+            if sy == ty:
+                d = f"M{sx} {sy} H{ex}"
+            else:
+                mx = int(edge.get("elbow_x") or (sx + (ex - sx) // 2))
+                d = f"M{sx} {sy} H{mx} V{ty} H{ex}"
+            lx, ly, anchor = sx + 6, sy - 5, "start"
+            if edge.get("label_at") == "end":
+                lx, ly, anchor = ex - 6, ty - 5, "end"
+            elif edge.get("label_at") == "vertical" and sy != ty:
+                mx = int(edge.get("elbow_x") or (sx + (ex - sx) // 2))
+                my = (sy + ty) // 2
+                parts.append(f'<path class="{cls}" d="{d}" marker-end="{marker}"/>')
+                parts.append(f'<text class="lab {esc(tone) if tone in self.tones else ""}" x="{mx + 6}" y="{my}" '
+                             f'transform="rotate(-90 {mx + 6} {my})" text-anchor="middle">{esc(label)}</text>')
+                return "".join(parts)
+        elif bx + bw <= ax:  # right -> left
+            sx, sy = ax, ay + ah // 2
+            ty = min(max(sy, by + 12), by + bh - 12)
+            ex = bx + bw
+            mx = sx - (sx - ex) // 2
+            d = f"M{sx} {sy} H{mx} V{ty} H{ex}" if sy != ty else f"M{sx} {sy} H{ex}"
+            lx, ly, anchor = sx - 6, sy - 5, "end"
+        else:  # same column: vertical
+            sx = ax + aw // 2
+            if by >= ay + ah:
+                sy, ey = ay + ah, by
+            else:
+                sy, ey = ay, by + bh
+            d = f"M{sx} {sy} V{ey}"
+            lx, ly, anchor = sx + 8, (sy + ey) // 2 + 4, "start"
+        parts.append(f'<path class="{cls}" d="{d}" marker-end="{marker}"/>')
+        if label:
+            parts.append(f'<text class="lab" x="{lx}" y="{ly}" text-anchor="{anchor}">{esc(label)}</text>')
+        return "".join(parts)
+
+    def svg(self):
+        markers = "".join(
+            f'<marker id="a-{esc(t)}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" '
+            f'orient="auto-start-reverse"><path class="mk {esc(t)}" d="M0,0 L10,5 L0,10 z"/></marker>'
+            for t in list(self.tones) + ["k"])
+        heads = "".join(f'<text class="head" x="{self.col_x[c["id"]]}" y="24">{esc(c.get("head"))}</text>'
+                        for c in self.columns)
+        nodes = "".join(self.svg_node(n) for n in self.nodes)
+        edges = "".join(self.svg_edge(e) for e in self.edges)
+        legend = self.svg_legend()
+        aria = esc(self.d.get("aria") or self.d.get("headline") or "")
+        return (f'<svg viewBox="0 0 {self.total_w} {self.total_h}" role="img" aria-label="{aria}">'
+                f'<defs>{markers}</defs>{heads}{nodes}{edges}{legend}</svg>')
+
+    def svg_legend(self):
+        y = self.legend_y
+        items = []
+        used = {e.get("tone") for e in self.edges if e.get("kind") != "none"}
+        for t in self.tones:
+            if t in used and self.tones[t].get("label"):
+                items.append((f"edge {t}", self.tones[t]["label"]))
+        kinds = {e.get("kind") or "solid" for e in self.edges}
+        leg = self.d.get("legend") or {}
+        first = next((t for t in self.tones if t in used), "k")
+        if "solid" in kinds:
+            items.append((f"edge {first}", leg.get("solid", "plein = déclenchement direct")))
+        if "dash" in kinds:
+            items.append((f"edge {first} dash", leg.get("dash", "tireté = appel explicite")))
+        if "none" in kinds:
+            items.append(("edge off", leg.get("none", "aucun effet")))
+        out, x = [], X0
+        for cls, label in items:
+            out.append(f'<line class="{cls}" x1="{x}" y1="{y}" x2="{x + 40}" y2="{y}"/>'
+                       f'<text class="lab" x="{x + 46}" y="{y + 4}">{esc(label)}</text>')
+            x += 46 + int(len(label) * 6.2) + 40
+        return "".join(out)
+
+    # ---------------------------------------------------------------- code blocks
+    def file_header(self, path, kind, href, note=None):
+        link = f'<a href="{esc(href)}" target="_blank" rel="noreferrer">GitHub ↗</a>' if href else ""
+        tag = "diff" if kind == "diff" else "hors diff"
+        return (f'<div class="fh"><span class="kind {kind}">{tag}</span><span class="path">{esc(path)}</span>'
+                f'<span class="note">{esc(note or "")}</span>{link}</div>')
+
+    @staticmethod
+    def parse_hunk(hunk):
+        rows, o, n = [], 1, 1
+        for line in str(hunk).split("\n"):
+            m = HUNK_RE.match(line)
+            if m:
+                o, n = int(m.group(1)), int(m.group(2))
+                rows.append(("hunk", "", "", line))
+            elif line.startswith("+"):
+                rows.append(("add", "", n, line[1:])); n += 1
+            elif line.startswith("-"):
+                rows.append(("del", o, "", line[1:])); o += 1
+            elif line.startswith("\\"):
+                rows.append(("meta", "", "", line))
+            else:
+                rows.append(("ctx", o, n, line[1:] if line[:1] == " " else line)); o += 1; n += 1
+        return rows
+
+    def render_diff(self, block):
+        path = str(block.get("path", ""))
+        rows = []
+        for h in block.get("hunks") or []:
+            rows.extend(self.parse_hunk(h))
+        signs = {"add": "+", "del": "-"}
+        tr = "".join(f'<tr class="{k}"><td class="ln">{o}</td><td class="ln">{n}</td>'
+                     f'<td class="sg">{signs.get(k, " ")}</td><td>{esc(t)}</td></tr>' for k, o, n, t in rows)
+        href = f"{self.pr_url}/files#diff-{hashlib.sha256(path.encode()).hexdigest()}" if self.pr_url else None
+        return (f'<div class="code">{self.file_header(path, "diff", href)}'
+                f'<div class="scroll"><table class="diff"><tbody>{tr}</tbody></table></div></div>')
+
+    def render_context(self, block):
+        path = str(block.get("path", ""))
+        segments = block.get("segments") or [block]
+        tr, anchor = "", None
+        for i, seg in enumerate(segments):
+            start = int(seg.get("start_line") or 1)
+            hl = {int(n) for n in (seg.get("highlight") or [])}
+            if hl and anchor is None:
+                anchor = min(hl)
+            if i:
+                tr += '<tr class="elide"><td class="ln">⋯</td><td></td></tr>'
+            for off, text in enumerate(str(seg.get("code", "")).split("\n")):
+                num = start + off
+                tr += f'<tr{" class=hl" if num in hl else ""}><td class="ln">{num}</td><td>{esc(text)}</td></tr>'
+        anchor = anchor or int(segments[0].get("start_line") or 1)
+        repo = block.get("repo") or self.repo
+        ref = block.get("ref") or self.head
+        href = f"https://github.com/{repo}/blob/{ref}/{path}#L{anchor}" if repo and ref else None
+        return (f'<div class="code">{self.file_header(path, "ctx", href, block.get("note"))}'
+                f'<div class="scroll"><table class="src"><tbody>{tr}</tbody></table></div></div>')
+
+    def render_facts(self, block):
+        out = ""
+        for item in block.get("items") or []:
+            detail = "".join(f"<p>{rich(p)}</p>" for p in as_list(item.get("detail")))
+            pre = ""
+            if item.get("command"):
+                pre = (f'<pre><span class="pr">$ </span>{esc(item["command"])}\n'
+                       f'{esc(item.get("output") or "aucun résultat")}</pre>')
+            out += f'<div class="fact">— {rich(item.get("text"))}{detail}{pre}</div>'
+        return f'<div class="facts">{out}</div>'
+
+    def render_block(self, block):
+        kind = block.get("kind")
+        if kind == "diff":
+            return self.render_diff(block)
+        if kind == "facts":
+            return self.render_facts(block)
+        return self.render_context(block)
+
+    def templates(self):
+        out = []
+        for node in self.nodes:
+            if not (node.get("blocks") or node.get("intro")):
+                continue
+            title = rich(node.get("modal_title") or node.get("title"))
+            intro = "".join(f'<p class="intro">{rich(p)}</p>' for p in as_list(node.get("intro")))
+            blocks = "".join(self.render_block(b) for b in node.get("blocks") or [])
+            out.append(f'<template data-node="{esc(node["id"])}" data-title="{esc(title)}">{intro}{blocks}</template>')
+        return "\n".join(out)
+
+    # ---------------------------------------------------------------- page parts
+    def table(self):
+        table = self.d.get("table")
+        if not table:
+            return ""
+        head = "".join(f"<th>{rich(h)}</th>" for h in table.get("head") or [])
+        rows = ""
+        for row in table.get("rows") or []:
+            attr = f' data-node="{esc(row["node"])}"' if row.get("node") else ""
+            tone = row.get("tone")
+            cells = list(row.get("cells") or [])
+            first = (f'<span class="dot {esc(tone)}"></span>' if tone else "") + (rich(cells[0]) if cells else "")
+            rest = "".join(f"<td>{rich(c)}</td>" for c in cells[1:])
+            rows += f"<tr{attr}><td>{first}</td>{rest}</tr>"
+        return (f'<section class="table"><h2>{rich(table.get("title"))}</h2><div class="tw"><table>'
+                f"<thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></div></section>")
+
+    def reading(self):
+        items = as_list(self.d.get("reading"))
+        if not items:
+            return ""
+        lis = "".join(f"<li>{rich(i)}</li>" for i in items)
+        return (f'<section class="reading"><h2>{rich(self.d.get("reading_title") or "Ce que le schéma montre")}</h2>'
+                f"<ul>{lis}</ul></section>")
+
+    def tone_css(self):
+        light, dark = [], []
+        for key, spec in self.tones.items():
+            l_ink, l_soft = spec["light"]
+            d_ink, d_soft = spec["dark"]
+            light.append(f"--{key}: {l_ink}; --{key}-soft: {l_soft};")
+            dark.append(f"--{key}: {d_ink}; --{key}-soft: {d_soft};")
+        rules = "".join(
+            f".box.{k}{{stroke:var(--{k});fill:var(--{k}-soft)}} text.{k}{{fill:var(--{k})}} "
+            f".edge.{k}{{stroke:var(--{k})}} .mk.{k}{{fill:var(--{k})}} .dot.{k}{{background:var(--{k})}}"
+            for k in self.tones)
+        return " ".join(light), " ".join(dark), rules
+
+    def html(self):
+        light, dark, tone_rules = self.tone_css()
+        d = self.d
+        meta = " · ".join(filter(None, [f'{self.repo}#{d.get("number")}' if self.repo else None,
+                                        f"head {self.head[:8]}" if self.head else None]))
+        hint = d.get("hint", "Cliquer une boîte (ou une ligne du tableau) ouvre le code concerné : hunks du diff, "
+                              "et extraits hors diff avec les lignes qui comptent surlignées. Échap ferme.")
+        return f"""<title>{esc(d.get("title") or "PR flow")}</title>
+<style>
+  :root {{ --bg:#f3f5f8; --surface:#fff; --ink:#1a222d; --muted:#5d6877; --line:#c9d0da; --off:#9aa3ae;
+          --note:#fbf5e6; --note-line:#d9c48a; --add-bg:#e4f3e8; --del-bg:#fbe7e4; --hl-bg:#fff1bf; --code-bg:#f7f8fa;
+          --focus:#0e6f8e; {light} }}
+  @media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{
+    --bg:#10151c; --surface:#181f28; --ink:#e5eaf1; --muted:#9aa6b5; --line:#35404d; --off:#6b7580;
+    --note:#2a2517; --note-line:#6b5a2a; --add-bg:#17301f; --del-bg:#3a1d1a; --hl-bg:#3b3312; --code-bg:#121820;
+    --focus:#57b8d6; {dark} }} }}
+  :root[data-theme="dark"] {{
+    --bg:#10151c; --surface:#181f28; --ink:#e5eaf1; --muted:#9aa6b5; --line:#35404d; --off:#6b7580;
+    --note:#2a2517; --note-line:#6b5a2a; --add-bg:#17301f; --del-bg:#3a1d1a; --hl-bg:#3b3312; --code-bg:#121820;
+    --focus:#57b8d6; {dark} }}
+  * {{ box-sizing:border-box; }}
+  body {{ margin:0; background:var(--bg); color:var(--ink); font-family:"IBM Plex Sans","Helvetica Neue",Arial,sans-serif; font-size:15px; line-height:1.5; }}
+  code {{ font-family:"IBM Plex Mono","SFMono-Regular",Menlo,monospace; font-size:.92em; }}
+  main {{ max-width:1320px; margin:0 auto; padding:32px 24px 56px; }}
+  header {{ display:flex; flex-direction:column; gap:6px; margin-bottom:20px; }}
+  .eyebrow {{ font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); font-weight:500; }}
+  h1 {{ font-size:24px; font-weight:600; margin:0; text-wrap:balance; line-height:1.25; }}
+  h1 code {{ font-size:.9em; font-weight:500; }}
+  .lede {{ color:var(--muted); max-width:72ch; margin:0; }}
+  .hint {{ font-size:13px; color:var(--muted); margin:0; }}
+  figure {{ margin:0; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:16px; }}
+  .scroll {{ overflow-x:auto; }}
+  figure svg {{ display:block; min-width:{min(self.total_w, 1180)}px; max-width:100%; height:auto; }}
+  figcaption {{ color:var(--muted); font-size:13px; margin-top:10px; max-width:90ch; }}
+  .box {{ fill:var(--surface); stroke:var(--line); stroke-width:1; rx:4; }}
+  .box.off {{ stroke:var(--off); stroke-dasharray:3 3; }}
+  .box.note {{ fill:var(--note); stroke:var(--note-line); stroke-dasharray:4 3; }}
+  .box.band {{ fill:var(--surface); stroke:var(--line); }}
+  svg text {{ fill:var(--ink); font-family:"IBM Plex Mono",Menlo,monospace; font-size:10.5px; }}
+  svg text.t {{ font-size:12px; font-weight:500; }}
+  svg text.sub {{ fill:var(--muted); font-size:10px; }}
+  svg text.sans {{ font-family:"IBM Plex Sans",Arial,sans-serif; }}
+  svg text.head {{ font-family:"IBM Plex Sans",Arial,sans-serif; font-size:11px; letter-spacing:.08em; text-transform:uppercase; fill:var(--muted); font-weight:500; }}
+  svg text.lab {{ font-size:10px; fill:var(--muted); }}
+  svg text.off {{ fill:var(--off); }}
+  .edge {{ fill:none; stroke:var(--ink); stroke-width:1.2; }}
+  .edge.dash {{ stroke-dasharray:5 4; }}
+  .edge.off {{ stroke:var(--off); stroke-dasharray:2 3; }}
+  .mk {{ fill:var(--ink); }} .mk.off {{ fill:var(--off); }}
+  .nil {{ fill:none; stroke:var(--off); stroke-width:1.4; }}
+  {tone_rules}
+  g.node {{ cursor:pointer; outline:none; }}
+  g.node .box {{ transition:stroke-width .12s, filter .12s; }}
+  g.node:hover .box, g.node:focus-visible .box {{ stroke-width:2; filter:drop-shadow(0 1px 3px rgba(0,0,0,.18)); }}
+  g.node:focus-visible .box {{ stroke:var(--focus); }}
+  g.node .cue {{ fill:var(--muted); font-size:9px; opacity:0; transition:opacity .12s; }}
+  g.node:hover .cue, g.node:focus-visible .cue {{ opacity:1; }}
+  @media (prefers-reduced-motion: reduce) {{ g.node .box, g.node .cue {{ transition:none; }} }}
+  section.table {{ margin-top:28px; }}
+  h2 {{ font-size:16px; font-weight:600; margin:0 0 10px; }}
+  .tw {{ overflow-x:auto; background:var(--surface); border:1px solid var(--line); border-radius:6px; }}
+  .tw table {{ border-collapse:collapse; width:100%; font-size:13.5px; min-width:900px; }}
+  .tw th, .tw td {{ text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }}
+  .tw th {{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:500; }}
+  .tw tr:last-child td {{ border-bottom:0; }}
+  .tw tr[data-node] {{ cursor:pointer; }} .tw tr[data-node]:hover td {{ background:var(--code-bg); }}
+  .dot {{ display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }} .dot.off {{ background:var(--off); }}
+  .reading {{ margin-top:24px; max-width:78ch; }} .reading ul {{ padding-left:20px; margin:6px 0 0; }} .reading li {{ margin:4px 0; }}
+  dialog {{ border:1px solid var(--line); border-radius:8px; padding:0; background:var(--surface); color:var(--ink); width:min(1120px,94vw); max-height:88vh; }}
+  dialog::backdrop {{ background:rgba(10,14,20,.55); }}
+  .mh {{ display:flex; align-items:baseline; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--surface); z-index:1; }}
+  .mh h3 {{ margin:0; font-size:16px; font-weight:600; flex:1; }} .mh h3 code {{ font-weight:500; }}
+  .mh button {{ font:inherit; font-size:13px; color:var(--muted); background:none; border:1px solid var(--line); border-radius:4px; padding:3px 10px; cursor:pointer; }}
+  .mh button:hover, .mh button:focus-visible {{ color:var(--ink); border-color:var(--focus); outline:none; }}
+  .mb {{ padding:14px 18px 22px; overflow:auto; max-height:calc(88vh - 56px); display:flex; flex-direction:column; gap:14px; }}
+  .mb .intro {{ margin:0; max-width:90ch; color:var(--muted); font-size:14px; }} .mb .intro code {{ color:var(--ink); }}
+  .code {{ border:1px solid var(--line); border-radius:6px; overflow:hidden; background:var(--code-bg); }}
+  .fh {{ display:flex; gap:12px; align-items:baseline; padding:6px 10px; border-bottom:1px solid var(--line); font-size:12px; background:var(--surface); }}
+  .fh .path {{ font-family:"IBM Plex Mono",Menlo,monospace; font-weight:500; }} .fh .note {{ color:var(--muted); flex:1; }}
+  .fh .kind {{ font-size:10px; letter-spacing:.06em; text-transform:uppercase; border:1px solid currentColor; border-radius:3px; padding:0 5px; color:var(--muted); }}
+  .fh .kind.diff {{ color:var(--focus); }}
+  .fh a {{ color:var(--muted); font-size:12px; text-decoration:none; }} .fh a:hover {{ color:var(--ink); text-decoration:underline; }}
+  table.src, table.diff {{ width:100%; font-family:"IBM Plex Mono",Menlo,monospace; font-size:12px; line-height:1.45; border-collapse:collapse; }}
+  table.src td, table.diff td {{ padding:0 8px; border:0; white-space:pre; vertical-align:top; }}
+  td.ln {{ color:var(--muted); text-align:right; user-select:none; width:1%; font-variant-numeric:tabular-nums; }}
+  td.sg {{ width:1%; user-select:none; color:var(--muted); padding:0 4px; }}
+  tr.add td {{ background:var(--add-bg); }} tr.del td {{ background:var(--del-bg); }}
+  tr.hunk td, tr.meta td {{ color:var(--muted); font-style:italic; background:var(--surface); }}
+  tr.hl td {{ background:var(--hl-bg); }} tr.elide td {{ color:var(--muted); text-align:center; }}
+  .facts {{ display:flex; flex-direction:column; gap:6px; }} .fact {{ font-size:14px; }} .fact p {{ margin:4px 0 0; color:var(--muted); }}
+  .fact pre {{ margin:6px 0 0; padding:8px 10px; background:var(--code-bg); border:1px solid var(--line); border-radius:4px; font-size:12px; line-height:1.45; overflow-x:auto; white-space:pre; }}
+  .fact .pr {{ color:var(--muted); }}
+</style>
+<main>
+  <header>
+    <div class="eyebrow">{esc(meta)}</div>
+    <h1>{rich(d.get("headline"))}</h1>
+    {"".join(f'<p class="lede">{rich(p)}</p>' for p in as_list(d.get("lede")))}
+    {f'<p class="hint">{rich(hint)}</p>' if hint else ""}
+  </header>
+  <figure><div class="scroll">{self.svg()}</div>
+    {f'<figcaption>{rich(d.get("caption"))}</figcaption>' if d.get("caption") else ""}</figure>
+  {self.table()}
+  {self.reading()}
+</main>
+<dialog id="dlg" aria-labelledby="dlg-title">
+  <div class="mh"><h3 id="dlg-title"></h3><button type="button" id="dlg-close">Fermer</button></div>
+  <div class="mb" id="dlg-body"></div>
+</dialog>
+{self.templates()}
+<script>
+(function () {{
+  var dlg = document.getElementById('dlg'), body = document.getElementById('dlg-body'), title = document.getElementById('dlg-title');
+  function open(id) {{
+    var tpl = document.querySelector('template[data-node="' + id + '"]');
+    if (!tpl) return;
+    title.innerHTML = tpl.getAttribute('data-title') || id;
+    body.innerHTML = ''; body.appendChild(tpl.content.cloneNode(true)); body.scrollTop = 0;
+    if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+  }}
+  document.querySelectorAll('[data-node]').forEach(function (el) {{
+    if (el.tagName.toLowerCase() === 'template') return;
+    el.addEventListener('click', function () {{ open(el.getAttribute('data-node')); }});
+    el.addEventListener('keydown', function (e) {{ if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); open(el.getAttribute('data-node')); }} }});
+  }});
+  document.getElementById('dlg-close').addEventListener('click', function () {{ dlg.close(); }});
+  dlg.addEventListener('click', function (e) {{ if (e.target === dlg) dlg.close(); }});
+}})();
+</script>
+"""
+
+
+def main():
+    if len(sys.argv) != 3:
+        sys.exit("usage: render.py flow.json out.html")
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+    flow = Flow(data)
+    # every edge endpoint must be a node
+    ids = {n["id"] for n in flow.nodes}
+    for e in flow.edges:
+        for end in ("from", "to"):
+            if e.get(end) and e[end] not in ids:
+                sys.exit(f"edge references unknown node: {e[end]!r}")
+    for row in (data.get("table") or {}).get("rows") or []:
+        if row.get("node") and row["node"] not in ids:
+            sys.exit(f"table row references unknown node: {row['node']!r}")
+    with open(sys.argv[2], "w", encoding="utf-8") as out:
+        out.write(flow.html())
+    print(sys.argv[2])
+
+
+if __name__ == "__main__":
+    main()

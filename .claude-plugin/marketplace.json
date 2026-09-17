@@ -5,9 +5,9 @@
   },
   "plugins": [
     {
-      "name": "review-requested-prs",
+      "name": "pr-review-toolkit",
       "source": "./",
-      "description": "Review the open PRs awaiting your requested review and leave pending feedback you finish on the GitHub UI."
+      "description": "Skills for reviewing pull requests: understand a PR (pr-brief), see its mechanism (pr-flow), draft pending review comments (review-requested-prs)."
     }
   ]
 }
