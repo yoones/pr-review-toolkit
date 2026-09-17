@@ -120,8 +120,8 @@ returns the output path. Leave the working tree as you found it.
 
 ## Step 3 — Write the brief as JSON
 
-Write `~/.claude/pr-briefs/<repo-short>-<number>.json` (keep it: it allows a re-render without
-redoing the analysis). Shape:
+Write `~/.claude/pr-briefs/<repo-short>-<number>.json` (`mkdir -p` the directory first; keep the
+file: it allows a re-render without redoing the analysis). Shape:
 
 ```jsonc
 {
@@ -246,13 +246,14 @@ something I can re-run. Never invent an output.
 ```
 python3 <skill-dir>/render.py \
   ~/.claude/pr-briefs/<repo-short>-<number>.json \
-  ~/.claude/pr-briefs/<repo-short>-<number>.html
-xdg-open ~/.claude/pr-briefs/<repo-short>-<number>.html   # macOS: open
+  ~/.claude/pr-briefs/<repo-short>-<number>.html --open
 ```
 
 `<skill-dir>` is the directory this `SKILL.md` was loaded from; `render.py` sits next to it and
-needs nothing beyond the Python standard library. The renderer handles HTML escaping, diff colouring, both sets of
-line numbers, and the GitHub links — never hand-write the HTML.
+needs nothing beyond the Python standard library. `--open` shows the page in the default browser
+on Linux and macOS alike — never call `xdg-open` or `open` yourself. The renderer handles HTML
+escaping, diff colouring, both sets of line numbers, and the GitHub links — never hand-write the
+HTML.
 
 Then report in the chat: one line per PR, `repo#number — titre — chemin du fichier`. Nothing more;
 the brief lives in the page, not in the chat.

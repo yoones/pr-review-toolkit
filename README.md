@@ -91,6 +91,8 @@ word to you.
 - [GitHub CLI](https://cli.github.com/) (`gh`) authenticated with `repo` scope. Check with
   `gh auth status`.
 - Python 3 for the two renderers (`render.py`, `blocks.py`). Standard library only, no packages.
+  Linux and macOS are both supported: the pages open in the default browser through Python's
+  `webbrowser` module, so no `xdg-open`/`open` dependency.
 
 ## Install
 

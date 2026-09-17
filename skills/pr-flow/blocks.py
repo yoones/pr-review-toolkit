@@ -80,7 +80,7 @@ class Blocks:
     # ---- context ----
     def show(self, path):
         if path not in self._files:
-            out = subprocess.run(["git", "show", f"{self.ref}:{path}"], capture_output=True, text=True)
+            out = subprocess.run(["git", "show", f"{self.ref}:{path}"], capture_output=True, text=True, encoding="utf-8")
             if out.returncode:
                 sys.exit(out.stderr.strip())
             self._files[path] = out.stdout.split("\n")

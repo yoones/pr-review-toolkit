@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Render a PR comprehension brief (JSON) into a self-contained HTML file.
 
-    python3 render.py brief.json out.html
+    python3 render.py brief.json out.html [--open]
+
+--open shows the page in the default browser; works the same on Linux and macOS.
+The output directory is created when missing.
 
 See SKILL.md for the JSON shape.
 """
@@ -9,6 +12,7 @@ See SKILL.md for the JSON shape.
 import hashlib
 import html
 import json
+import os
 import re
 import sys
 
@@ -787,14 +791,26 @@ def build(data):
             + f"<script>{JS}</script>\n<script>{COMMENTS_JS}</script>\n</body>\n</html>\n")
 
 
+def open_in_browser(path):
+    """Open the rendered page with the platform's default browser (Linux, macOS, Windows)."""
+    import os
+    import webbrowser
+    webbrowser.open("file://" + os.path.abspath(path))
+
+
 def main():
-    if len(sys.argv) != 3:
-        sys.exit("usage: render.py <brief.json> <out.html>")
-    with open(sys.argv[1], encoding="utf-8") as handle:
+    args = [a for a in sys.argv[1:] if a != "--open"]
+    if len(args) != 2:
+        sys.exit("usage: render.py <brief.json> <out.html> [--open]")
+    src, dst = args
+    with open(src, encoding="utf-8") as handle:
         data = json.load(handle)
-    with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+    with open(dst, "w", encoding="utf-8") as handle:
         handle.write(build(data))
-    print(sys.argv[2])
+    print(dst)
+    if "--open" in sys.argv:
+        open_in_browser(dst)
 
 
 if __name__ == "__main__":

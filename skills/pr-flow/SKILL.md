@@ -81,6 +81,8 @@ when the spec is large — that is usually the case; write the builder in the sc
 
 ## The JSON spec — `~/.claude/pr-flows/<repo-short>-<number>.json`
 
+`mkdir -p` the directory first, and keep the file (see the end of this page).
+
 ```jsonc
 {
   "repo": "Owner/repo", "number": 250, "url": "https://github.com/…/pull/250",
@@ -146,11 +148,11 @@ tones and kinds actually used, and refuses an edge or table row that names an un
 ```
 python3 <skill-dir>/render.py \
   ~/.claude/pr-flows/<repo-short>-<number>.json \
-  ~/.claude/pr-flows/<repo-short>-<number>.html
-xdg-open ~/.claude/pr-flows/<repo-short>-<number>.html   # macOS: open
+  ~/.claude/pr-flows/<repo-short>-<number>.html --open
 ```
 
-`render.py` needs nothing beyond the Python standard library.
+`render.py` needs nothing beyond the Python standard library. `--open` shows the page in the
+default browser on Linux and macOS alike — never call `xdg-open` or `open` yourself.
 
 Then a one-line report in the chat: `repo#number — titre — chemin du fichier`. Everything else
 lives in the page.

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Render a PR flow spec (JSON) into a self-contained interactive HTML page.
 
-    python3 render.py flow.json out.html
+    python3 render.py flow.json out.html [--open]
+
+--open shows the page in the default browser; works the same on Linux and macOS.
+The output directory is created when missing.
 
 The page is a left-to-right SVG diagram (columns of nodes, labelled edges) where every
 node opens a modal carrying the code it stands for: diff hunks (verbatim) and out-of-diff
@@ -12,6 +15,7 @@ coordinates. See SKILL.md for the JSON shape.
 import hashlib
 import html
 import json
+import os
 import re
 import sys
 
@@ -489,10 +493,20 @@ class Flow:
 """
 
 
+def open_in_browser(path):
+    """Open the rendered page with the platform's default browser (Linux, macOS, Windows)."""
+    import os
+    import webbrowser
+    webbrowser.open("file://" + os.path.abspath(path))
+
+
 def main():
-    if len(sys.argv) != 3:
-        sys.exit("usage: render.py flow.json out.html")
-    data = json.load(open(sys.argv[1], encoding="utf-8"))
+    args = [a for a in sys.argv[1:] if a != "--open"]
+    if len(args) != 2:
+        sys.exit("usage: render.py flow.json out.html [--open]")
+    src, dst = args
+    with open(src, encoding="utf-8") as handle:
+        data = json.load(handle)
     flow = Flow(data)
     # every edge endpoint must be a node
     ids = {n["id"] for n in flow.nodes}
@@ -503,9 +517,12 @@ def main():
     for row in (data.get("table") or {}).get("rows") or []:
         if row.get("node") and row["node"] not in ids:
             sys.exit(f"table row references unknown node: {row['node']!r}")
-    with open(sys.argv[2], "w", encoding="utf-8") as out:
+    os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+    with open(dst, "w", encoding="utf-8") as out:
         out.write(flow.html())
-    print(sys.argv[2])
+    print(dst)
+    if "--open" in sys.argv:
+        open_in_browser(dst)
 
 
 if __name__ == "__main__":
