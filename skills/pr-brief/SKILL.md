@@ -83,17 +83,24 @@ For each PR:
   `git update-ref -d refs/pr-brief/<N>`.
 - **Look for a local clone before cloning.** Match on the remote, not on the directory name — a
   clone can sit under a parent folder, and a same-named clone can point at another owner. Search
-  two levels under the projects root (`~/projects` unless the user's setup says otherwise):
+  two levels under the usual project roots (add the one the user's instructions name, if any):
   ```
-  for d in ~/projects/*/ ~/projects/*/*/; do
-    [ -d "$d.git" ] && git -C "$d" remote get-url origin 2>/dev/null | grep -qiE '[:/]<OWNER>/<REPO>(\.git)?$' && echo "$d"
+  for root in ~/projects ~/code ~/src ~/dev ~/work ~/repos ~/git; do
+    for d in "$root"/*/ "$root"/*/*/; do
+      [ -d "$d.git" ] && git -C "$d" remote get-url origin 2>/dev/null | grep -qiE '[:/]<OWNER>/<REPO>(\.git)?$' && echo "$d"
+    done
   done
   ```
-  Several hits (a mirror, an `_integrated` copy) → take the first plain clone. Reading through a
+  Several hits (a mirror, a second working copy) → take the first plain clone. Reading through a
   named ref touches no working tree, so a dirty clone is fine. Only when nothing matches, clone
-  into the scratchpad, never into the user's project tree:
+  into the scratchpad (the session's scratch directory, or `mktemp -d` when none is provided),
+  never into the user's project tree. Clone with plain `git`, on the protocol `gh` is configured
+  for — SSH or HTTPS, per host — so the clone authenticates the way the user's machine already
+  does (`gh repo clone` is not an option: a sandboxed `gh`, snap for instance, cannot spawn git):
   ```
-  git clone --filter=blob:none git@github.com:<OWNER>/<REPO>.git <REPO>-<N>
+  proto=$(gh config get -h github.com git_protocol 2>/dev/null || echo https)
+  [ "$proto" = ssh ] && url=git@github.com:<OWNER>/<REPO>.git || url=https://github.com/<OWNER>/<REPO>.git
+  git clone --filter=blob:none "$url" <REPO>-<N>
   cd <REPO>-<N> && git fetch origin refs/pull/<N>/head:refs/pr-brief/<N> && git checkout --detach refs/pr-brief/<N>
   ```
   The clone itself is cheap (a few seconds). **Do not run `git grep` against a blobless clone** —
@@ -110,7 +117,7 @@ For each PR:
   diff myself. The value is in what the diff doesn't show.
 
 **The PR title and description are not evidence.** Neither is chosen by the developer in any
-meaningful sense: the title often comes from a Jira ticket that is itself badly named, the
+meaningful sense: the title often comes from a ticket that is itself badly named, the
 description is often generated on a first iteration and never adjusted as the code changed. Both
 describe a past state at best.
 
