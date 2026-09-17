@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Build code blocks for a pr-flow spec without hand-copying line numbers.
+"""Build code blocks for a pr-brief / pr-flow spec without hand-copying anything.
+
+Shared by both skills: `diff`, `context` and `facts` blocks have the same shape in a brief
+and in a flow. Run it from the repository (or the scratchpad clone) that holds the ref.
 
 CLI (each command prints one JSON block on stdout):
 
@@ -12,10 +15,23 @@ CLI (each command prints one JSON block on stdout):
       Out-of-diff excerpt read from `git show <ref>:<path>`; several ranges become
       segments separated by an elision row. --hl lists the lines to highlight.
 
-  blocks.py facts '<text>' [--cmd '<command>' --out '<output>'] ...
-      One fact item; run the command yourself and paste its real output.
+  blocks.py facts '<text>' --run '<command>'
+      One fact item whose command is RUN here and whose output is captured verbatim.
+      Several --run flags pair with several texts, in order.
+  blocks.py facts '<text>' [--cmd '<command>' --out '<output>']
+      Only for an output that no shell command can reproduce (a console scenario):
+      the output is pasted from where it was produced, verbatim.
 
-Importable too:  from blocks import Blocks; b = Blocks(ref, diff_path); b.ctx(...); b.diff(...)
+Importable (the usual way — write a builder script in the scratchpad):
+
+    from blocks import Blocks
+    B = Blocks(ref="refs/pr-brief/<N>", diff_path="<scratch>/pr-<N>.diff")
+    B.diff(path)                                  # every hunk of the file, verbatim
+    B.diff(path, hunks=[0])                       # selected hunks
+    B.diff(path, trim=(31, 71))                   # new-file hunk cut to added lines 31..71
+    B.ctx(path, [(18, 30)], highlight=[22])       # excerpt from the ref, with line numbers
+    B.ran("`Foo` has no spec.", "git grep -n Foo refs/pr-brief/<N> -- spec")   # runs it
+    Blocks.facts([...])                           # wraps fact items into a block
 """
 
 import argparse
@@ -27,9 +43,13 @@ import sys
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
+EMPTY_OUTPUT = "(aucun résultat)"
+
+
 class Blocks:
-    def __init__(self, ref=None, diff_path=None):
+    def __init__(self, ref=None, diff_path=None, cwd=None):
         self.ref = ref
+        self.cwd = cwd  # repository to run git and fact commands in (default: current dir)
         self._files = {}
         self._hunks = {}
         if diff_path:
@@ -80,7 +100,8 @@ class Blocks:
     # ---- context ----
     def show(self, path):
         if path not in self._files:
-            out = subprocess.run(["git", "show", f"{self.ref}:{path}"], capture_output=True, text=True, encoding="utf-8")
+            out = subprocess.run(["git", "show", f"{self.ref}:{path}"],
+                                 capture_output=True, text=True, encoding="utf-8", cwd=self.cwd)
             if out.returncode:
                 sys.exit(out.stderr.strip())
             self._files[path] = out.stdout.split("\n")
@@ -108,13 +129,26 @@ class Blocks:
 
     @staticmethod
     def fact(text, command=None, output=None, detail=None):
+        """A fact item with a pasted output. Prefer `ran`, which executes the command."""
         item = {"text": text}
         if detail:
             item["detail"] = detail
         if command:
             item["command"] = command
-            item["output"] = output or ""
+            item["output"] = output or EMPTY_OUTPUT
         return item
+
+    def ran(self, text, command, detail=None, empty=EMPTY_OUTPUT):
+        """A fact item whose command is executed now; its real output is embedded.
+
+        stdout wins; an empty stdout falls back to stderr, then to `empty` (the text the
+        page shows for "nothing matched"). The exit code is deliberately ignored: `grep`
+        exits 1 on no match, and no match is often the very fact being established.
+        """
+        run = subprocess.run(command, shell=True, capture_output=True, text=True,
+                             encoding="utf-8", cwd=self.cwd)
+        output = run.stdout.strip() or run.stderr.strip() or empty
+        return self.fact(text, command, output, detail)
 
     @staticmethod
     def facts(items):
@@ -140,7 +174,10 @@ def main():
     c.add_argument("ref"); c.add_argument("path"); c.add_argument("ranges")
     c.add_argument("--hl"); c.add_argument("--note")
     f = sub.add_parser("facts")
-    f.add_argument("text", nargs="+"); f.add_argument("--cmd", dest="command", action="append"); f.add_argument("--out", action="append")
+    f.add_argument("text", nargs="+")
+    f.add_argument("--run", action="append", help="command to execute; its output is captured")
+    f.add_argument("--cmd", dest="command", action="append", help="command shown but not run (with --out)")
+    f.add_argument("--out", action="append")
     a = ap.parse_args()
 
     if a.cmd == "diff":
@@ -152,9 +189,15 @@ def main():
         hl = [int(x) for x in a.hl.split(",")] if a.hl else None
         print(json.dumps(b.ctx(a.path, parse_ranges(a.ranges), hl, a.note), ensure_ascii=False, indent=1))
     else:
-        cmds, outs = a.command or [], a.out or []
-        items = [Blocks.fact(t, cmds[i] if i < len(cmds) else None, outs[i] if i < len(outs) else None)
-                 for i, t in enumerate(a.text)]
+        b = Blocks()
+        runs, cmds, outs = a.run or [], a.command or [], a.out or []
+        items = []
+        for i, text in enumerate(a.text):
+            if i < len(runs):
+                items.append(b.ran(text, runs[i]))
+            else:
+                items.append(Blocks.fact(text, cmds[i] if i < len(cmds) else None,
+                                         outs[i] if i < len(outs) else None))
         print(json.dumps(Blocks.facts(items), ensure_ascii=False, indent=1))
 
 

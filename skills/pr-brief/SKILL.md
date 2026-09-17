@@ -81,10 +81,17 @@ For each PR:
   sit at the root, outside any directory. Look at the tree before you grep.
   Nothing is written to the working tree. Delete the ref when done:
   `git update-ref -d refs/pr-brief/<N>`.
-- The PR may live in a repo that is **not cloned locally** — the local clone can even carry the same
-  name under a different owner, so check `git remote get-url origin` against the PR's
-  `nameWithOwner` before trusting it. When it isn't there, clone into the scratchpad, never into the
-  user's project tree:
+- **Look for a local clone before cloning.** Match on the remote, not on the directory name — a
+  clone can sit under a parent folder, and a same-named clone can point at another owner. Search
+  two levels under the projects root (`~/projects` unless the user's setup says otherwise):
+  ```
+  for d in ~/projects/*/ ~/projects/*/*/; do
+    [ -d "$d.git" ] && git -C "$d" remote get-url origin 2>/dev/null | grep -qiE '[:/]<OWNER>/<REPO>(\.git)?$' && echo "$d"
+  done
+  ```
+  Several hits (a mirror, an `_integrated` copy) → take the first plain clone. Reading through a
+  named ref touches no working tree, so a dirty clone is fine. Only when nothing matches, clone
+  into the scratchpad, never into the user's project tree:
   ```
   git clone --filter=blob:none git@github.com:<OWNER>/<REPO>.git <REPO>-<N>
   cd <REPO>-<N> && git fetch origin refs/pull/<N>/head:refs/pr-brief/<N> && git checkout --detach refs/pr-brief/<N>
@@ -121,7 +128,28 @@ returns the output path. Leave the working tree as you found it.
 ## Step 3 — Write the brief as JSON
 
 Write `~/.claude/pr-briefs/<repo-short>-<number>.json` (`mkdir -p` the directory first; keep the
-file: it allows a re-render without redoing the analysis). Shape:
+file: it allows a re-render without redoing the analysis).
+
+**Build it with a script, never by hand.** Write `<scratch>/build-<N>.py`, run it from the clone
+that holds the ref, and let `blocks.py` (next to this `SKILL.md`) produce every block: hunks come
+from the saved diff, excerpts from `git show`, fact outputs from commands it executes itself.
+Typing a hunk, a line number or a command output by hand is how a brief lies.
+
+```python
+import sys; sys.path.insert(0, "<skill-dir>")
+from blocks import Blocks
+B = Blocks(ref="refs/pr-brief/<N>", diff_path="<scratch>/pr-<N>.diff")
+
+B.diff("app/models/order.rb")                      # every hunk of the file, verbatim
+B.diff("app/models/order.rb", hunks=[0])           # selected hunks
+B.diff("app/views/x.html.erb", trim=(31, 71))      # new-file hunk cut to added lines 31..71, header recomputed
+B.ctx("app/jobs/foo_job.rb", [(26, 47)], highlight=[31, 46], note="save! → callback")
+B.ctx("app/models/user.rb", [(73, 76), (290, 297)], highlight=[76])   # two segments, one block
+B.ran("Aucun spec ne nomme `Foo`.", "git grep -n Foo refs/pr-brief/<N> -- spec")   # runs the command
+Blocks.facts([ ... ])                              # wraps fact items into a facts block
+```
+
+Then `json.dump` the dict below to the output path. Shape:
 
 ```jsonc
 {
@@ -224,9 +252,16 @@ among the most load-bearing facts a brief carries, and they have no code to embe
 `facts` block — a list where the **visible line is the fact itself**, and the chevron appears only
 when the item carries a `detail` or a `command`.
 
-Run the command before you print it, and print its real output. An absence asserted in prose is
-something I have to take on trust; an absence shown with the command that establishes it is
-something I can re-run. Never invent an output.
+**The `output` field is never typed.** Build the item with `B.ran(text, command)`: the command
+runs when the block is built and its real output lands in the page, `(aucun résultat)` when it
+prints nothing. If the output is not what you expected, change the fact, not the output — a
+command that matches elsewhere than you assumed is the brief's first finding, not a nuisance.
+`Blocks.fact(text, command, output)` exists only for a result no shell command reproduces (a
+scenario run in a console); then the output is pasted from that console, verbatim.
+
+An absence asserted in prose is something I have to take on trust; an absence shown with the
+command that establishes it is something I can re-run. Scope the command to what the fact claims:
+"no spec exercises X on this path" is established on the spec files of that path, not on `spec/`.
 
 ### Excerpt sizing
 

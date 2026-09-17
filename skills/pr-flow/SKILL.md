@@ -63,21 +63,26 @@ One `intro` (1–3 descriptive sentences), then blocks, most load-bearing first:
 - the **diff hunks** of the files the box stands for — verbatim, headers recomputed if trimmed;
 - the **out-of-diff excerpts** that make the box true — the enclosing method, whole, with the
   decisive lines in `highlight` (the `save!`, the `RETURNING`, the guard that is or isn't there);
-- **facts** with the command that establishes them and its *real* output (`git grep … → aucun
-  résultat`, a scenario you ran, a generated SQL). Never invent an output.
+- **facts** with the command that establishes them and its *real* output, produced by `B.ran`
+  (`git grep … → aucun résultat`, a generated SQL). `Blocks.fact` with a pasted output only for
+  a scenario run in a console. Never invent an output.
 
-Use `blocks.py` to build blocks without line-number mistakes:
+Build every block with `blocks.py`, which lives in the sibling skill: `<skill-dir>/../pr-brief/blocks.py`
+(`<skill-dir>` is the directory this `SKILL.md` was loaded from). Write a builder script in the
+scratchpad, run it from the clone that holds the ref — the same pattern as `pr-brief`, step 3:
 
+```python
+import sys; sys.path.insert(0, "<skill-dir>/../pr-brief")
+from blocks import Blocks
+B = Blocks(ref="refs/pr-brief/<N>", diff_path="<scratch>/pr-<N>.diff")
+B.diff("app/models/order_refund.rb")                       # all hunks
+B.diff("app/views/x.html.erb", trim=(86, 105))             # new file, trimmed, header recomputed
+B.ctx("app/jobs/foo_job.rb", [(26, 47)], highlight=[31, 46], note="save! → callback")
+B.ctx("app/models/user.rb", [(73, 76), (290, 297)], highlight=[76, 296])   # segments
+B.ran("Aucun test sur `Account` dans ce job.", "git grep -n Account refs/pr-brief/<N> -- spec/jobs")
 ```
-B=<skill-dir>/blocks.py      # <skill-dir>: the directory this SKILL.md was loaded from
-python3 $B diff  <scratch>/pr-<N>.diff app/models/order_refund.rb          # all hunks
-python3 $B diff  <scratch>/pr-<N>.diff app/views/x.html.erb --trim 86-105  # new file, trimmed
-python3 $B ctx   refs/pr-brief/<N> app/jobs/foo_job.rb 26-47 --hl 31,46 --note "save! → callback"
-python3 $B ctx   refs/pr-brief/<N> app/models/user.rb 73-76,290-297 --hl 76,296   # segments
-```
 
-Each prints a JSON block to paste into the spec (or `from blocks import Blocks` in a builder script
-when the spec is large — that is usually the case; write the builder in the scratchpad).
+A fact's `output` is never typed: `B.ran` executes the command and embeds what it printed.
 
 ## The JSON spec — `~/.claude/pr-flows/<repo-short>-<number>.json`
 
