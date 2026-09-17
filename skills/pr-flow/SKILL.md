@@ -86,7 +86,9 @@ A fact's `output` is never typed: `B.ran` executes the command and embeds what i
 
 ## The JSON spec — `~/.claude/pr-flows/<repo-short>-<number>.json`
 
-`mkdir -p` the directory first, and keep the file (see the end of this page).
+`mkdir -p` the directory first, and keep the file (see the end of this page). The shape below
+is shown as JSON; the builder script writes it as a Python dict, so `true`/`false`/`null`
+become `True`/`False`/`None` there.
 
 ```jsonc
 {
