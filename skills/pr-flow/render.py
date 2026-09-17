@@ -616,22 +616,24 @@ class Flow:
     setZoom(k * (e.deltaY < 0 ? 1.12 : 1 / 1.12), e.clientX - r.left, e.clientY - r.top);
   }}, {{ passive: false }});
   canvas.addEventListener('dblclick', function (e) {{ if (!e.target.closest('[data-node]')) one(); }});
+  /* No pointer capture: a captured pointer sends the click to the canvas, and the boxes
+     would no longer open. The drag is followed on window instead. */
   var start = null;
   canvas.addEventListener('pointerdown', function (e) {{
     if (e.button !== 0) return;
     start = {{ x: e.clientX, y: e.clientY, tx: tx, ty: ty }}; dragged = false;
-    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
   }});
-  canvas.addEventListener('pointermove', function (e) {{
+  window.addEventListener('pointermove', function (e) {{
     if (!start) return;
     var dx = e.clientX - start.x, dy = e.clientY - start.y;
     if (!dragged && Math.abs(dx) + Math.abs(dy) < 4) return;
     dragged = true; canvas.classList.add('drag');
     tx = start.tx + dx; ty = start.ty + dy; apply();
   }});
-  function endDrag() {{ start = null; canvas.classList.remove('drag'); center(); apply(); }}
-  canvas.addEventListener('pointerup', endDrag);
-  canvas.addEventListener('pointercancel', endDrag);
+  function endDrag() {{ if (!start) return; start = null; canvas.classList.remove('drag'); center(); apply(); }}
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
   window.addEventListener('resize', function () {{ center(); apply(); }});
   one();
 
