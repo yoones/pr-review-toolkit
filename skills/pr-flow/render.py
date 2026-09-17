@@ -24,7 +24,34 @@ INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 
 X0, COL_GAP, Y0 = 20, 50, 44
 NODE_GAP, PAD = 10, 10
-LINE_H, TITLE_H = 14, 18
+LINE_H, TITLE_H = 16, 20
+TITLE_EXTRA_H = 18          # each wrapped title line after the first
+NONE_STUB_W = 90            # stub + ∅ circle of a `none` edge; its label is drawn inside the box
+CUE_W = 44                  # room kept free of the title for the "diff ›" cue
+
+# Estimated advance width per character, by text class, in px. SVG text cannot wrap by
+# itself, so the layout wraps every title and line to the box width from these figures
+# (IBM Plex Mono advances 0.6 em; the sans figures are averages with a margin).
+CHAR_W = {"t": 8.1, "t sans": 7.4, "code": 7.1, "sub": 6.6, "lab": 6.6, "sans": 6.1, "text": 6.4}
+
+
+def wrap_text(text, max_chars):
+    """Greedy word wrap; a token longer than the width is cut hard. Never returns []."""
+    text = "" if text is None else str(text)
+    max_chars = max(4, int(max_chars))
+    lines, cur = [], ""
+    for word in text.split(" "):
+        while len(word) > max_chars:
+            if cur:
+                lines.append(cur); cur = ""
+            lines.append(word[:max_chars]); word = word[max_chars:]
+        cand = word if not cur else f"{cur} {word}"
+        if len(cand) <= max_chars:
+            cur = cand
+        else:
+            lines.append(cur); cur = word
+    lines.append(cur)
+    return lines or [""]
 
 
 def esc(value):
@@ -70,22 +97,55 @@ class Flow:
 
     # ---------------------------------------------------------------- layout
     def layout(self):
+        ids = [c["id"] for c in self.columns]
+        node_col = {n["id"]: n.get("col") for n in self.nodes}
+        # Edge labels live in the gap between two columns: widen each gap to its longest label
+        # (a horizontal label at the start or the end of the edge) so text never runs over a box.
+        gaps = [COL_GAP] * max(0, len(ids) - 1)
+        self.none_labels = {}
+        for e in self.edges:
+            src = node_col.get(e.get("from"))
+            if e.get("kind") == "none":
+                self.none_labels.setdefault(e["from"], []).append(e.get("label") or "")
+                if src in ids and ids.index(src) < len(gaps):
+                    gaps[ids.index(src)] = max(gaps[ids.index(src)], NONE_STUB_W)
+                continue
+            dst = node_col.get(e.get("to"))
+            label = e.get("label")
+            if not label or src not in ids or dst not in ids or e.get("label_at") == "vertical":
+                continue
+            i, j = ids.index(src), ids.index(dst)
+            if i == j:
+                continue
+            need = int(len(str(label)) * CHAR_W["lab"]) + 16
+            g = (j - 1 if e.get("label_at") == "end" else i) if i < j else (i - 1 if e.get("label_at") != "end" else j)
+            g = min(max(g, 0), len(gaps) - 1)
+            gaps[g] = max(gaps[g], need)
         x = X0
-        self.col_x, self.col_w = {}, {}
-        for col in self.columns:
+        self.col_x, self.col_w, self.gap_after = {}, {}, {}
+        for index, col in enumerate(self.columns):
             w = int(col.get("width") or 280)
             self.col_x[col["id"]], self.col_w[col["id"]] = x, w
-            x += w + COL_GAP
-        self.total_w = x - COL_GAP + X0
+            self.gap_after[col["id"]] = gaps[index] if index < len(gaps) else 0
+            x += w + self.gap_after[col["id"]]
+        self.total_w = x + X0
 
         cursor = {c["id"]: Y0 for c in self.columns}
-        self.rect = {}
+        self.rect, self.text = {}, {}
         for node in self.nodes:
-            lines = node.get("lines") or []
-            h = int(node.get("height") or max(40, PAD + TITLE_H + LINE_H * len(lines) + 8))
             col = node.get("col")
             if col == "*":
                 nx, nw = X0, self.total_w - 2 * X0
+            else:
+                nx, nw = self.col_x[col], self.col_w[col]
+                if node.get("span"):
+                    ids = [c["id"] for c in self.columns]
+                    last = ids[min(len(ids) - 1, ids.index(col) + int(node["span"]) - 1)]
+                    nw = self.col_x[last] + self.col_w[last] - nx
+            title_lines, lines = self.wrap_node(node, nw)
+            h = int(node.get("height") or max(40, PAD + TITLE_H + TITLE_EXTRA_H * (len(title_lines) - 1)
+                                                  + LINE_H * len(lines) + 8))
+            if col == "*":
                 y = node.get("y")
                 if y is None:
                     y = max(cursor.values()) + 30
@@ -93,20 +153,36 @@ class Flow:
                 for key in cursor:
                     cursor[key] = y + h + NODE_GAP
             else:
-                nx, nw = self.col_x[col], self.col_w[col]
-                if node.get("span"):
-                    ids = [c["id"] for c in self.columns]
-                    last = ids[min(len(ids) - 1, ids.index(col) + int(node["span"]) - 1)]
-                    nw = self.col_x[last] + self.col_w[last] - nx
                 y = node.get("y")
                 if y is None:
                     y = cursor[col] + int(node.get("gap") or 0)
                 y = int(y)
                 cursor[col] = y + h + NODE_GAP
             self.rect[node["id"]] = (nx, y, nw, h)
+            self.text[node["id"]] = (title_lines, lines)
         bottom = max((r[1] + r[3] for r in self.rect.values()), default=Y0)
         self.legend_y = bottom + 34
         self.total_h = self.legend_y + 14
+
+    def wrap_node(self, node, width):
+        """Wrap the title and every line to the box width. Returns (title_lines, [(cls, text)])."""
+        avail = width - 20
+        title_key = "t sans" if node.get("sans") else "t"
+        title_lines = wrap_text(node.get("title"), (avail - CUE_W) / CHAR_W[title_key])
+        tone = node.get("tone") or "plain"
+        lines = []
+        for line in node.get("lines") or []:
+            if isinstance(line, str):
+                line = {"text": line}
+            style = line.get("style") or "code"
+            lcls = {"code": "", "sub": "sub", "lab": f"lab {esc(tone)}" if tone in self.tones else "lab",
+                    "sans": "sub sans", "text": "sans"}.get(style, "")
+            for piece in wrap_text(line.get("text"), avail / CHAR_W.get(style, CHAR_W["code"])):
+                lines.append((lcls, piece))
+        for label in self.none_labels.get(node["id"], []):
+            for piece in wrap_text("∅ " + label, avail / CHAR_W["sub"]):
+                lines.append(("sub off", piece))
+        return title_lines, lines
 
     # ---------------------------------------------------------------- svg
     def svg_node(self, node):
@@ -120,15 +196,12 @@ class Flow:
         title_cls = "t sans" if node.get("sans") else "t"
         if tone == "off":
             title_cls += " off"
-        out.append(f'<text class="{title_cls}" x="{x + 10}" y="{ty}">{esc(node.get("title"))}</text>')
-        ty += TITLE_H - 2
-        for line in node.get("lines") or []:
-            if isinstance(line, str):
-                line = {"text": line}
-            style = line.get("style") or "code"
-            lcls = {"code": "", "sub": "sub", "lab": f"lab {esc(tone)}" if tone in self.tones else "lab",
-                    "sans": "sub sans", "text": "sans"}.get(style, "")
-            out.append(f'<text class="{lcls}" x="{x + 10}" y="{ty}">{esc(line.get("text"))}</text>')
+        title_lines, lines = self.text[node["id"]]
+        for index, piece in enumerate(title_lines):
+            out.append(f'<text class="{title_cls}" x="{x + 10}" y="{ty}">{esc(piece)}</text>')
+            ty += TITLE_EXTRA_H if index < len(title_lines) - 1 else TITLE_H - 2
+        for lcls, piece in lines:
+            out.append(f'<text class="{lcls}" x="{x + 10}" y="{ty}">{esc(piece)}</text>')
             ty += LINE_H
         if has_modal:
             out.append(f'<text class="cue" x="{x + w - 8}" y="{y + 12}" text-anchor="end">{esc(cue)} ›</text>')
@@ -136,6 +209,15 @@ class Flow:
             return (f'<g class="node" data-node="{esc(node["id"])}" tabindex="0" role="button" '
                     f'aria-label="Ouvrir le code : {label}">{"".join(out)}</g>')
         return f'<g>{"".join(out)}</g>'
+
+    def default_elbow(self, edge, sx, ex):
+        """Elbow of a left-to-right edge: mid-gap when the columns are adjacent, else in the
+        middle of the first gap so the vertical run sits between columns, not across boxes."""
+        node_col = {n["id"]: n.get("col") for n in self.nodes}
+        src = node_col.get(edge.get("from"))
+        if src in self.gap_after and sx + self.gap_after[src] < ex:
+            return sx + self.gap_after[src] // 2
+        return sx + (ex - sx) // 2
 
     def svg_edge(self, edge):
         a = self.rect[edge["from"]]
@@ -150,9 +232,7 @@ class Flow:
             parts.append(f'<path class="edge off" d="M{sx} {sy} H{sx + 62}"/>')
             parts.append(f'<circle class="nil" cx="{sx + 72}" cy="{sy}" r="6"/>'
                          f'<line class="nil" x1="{sx + 68}" y1="{sy + 4}" x2="{sx + 76}" y2="{sy - 4}"/>')
-            if label:
-                parts.append(f'<text class="lab off" x="{sx + 84}" y="{sy + 4}">{esc(label)}</text>')
-            return "".join(parts)
+            return "".join(parts)   # the label is drawn inside the box (see wrap_node)
 
         b = self.rect[edge["to"]]
         bx, by, bw, bh = b
@@ -166,13 +246,13 @@ class Flow:
             if sy == ty:
                 d = f"M{sx} {sy} H{ex}"
             else:
-                mx = int(edge.get("elbow_x") or (sx + (ex - sx) // 2))
+                mx = int(edge.get("elbow_x") or self.default_elbow(edge, sx, ex))
                 d = f"M{sx} {sy} H{mx} V{ty} H{ex}"
             lx, ly, anchor = sx + 6, sy - 5, "start"
             if edge.get("label_at") == "end":
                 lx, ly, anchor = ex - 6, ty - 5, "end"
             elif edge.get("label_at") == "vertical" and sy != ty:
-                mx = int(edge.get("elbow_x") or (sx + (ex - sx) // 2))
+                mx = int(edge.get("elbow_x") or self.default_elbow(edge, sx, ex))
                 my = (sy + ty) // 2
                 parts.append(f'<path class="{cls}" d="{d}" marker-end="{marker}"/>')
                 parts.append(f'<text class="lab {esc(tone) if tone in self.tones else ""}" x="{mx + 6}" y="{my}" '
@@ -209,7 +289,8 @@ class Flow:
         edges = "".join(self.svg_edge(e) for e in self.edges)
         legend = self.svg_legend()
         aria = esc(self.d.get("aria") or self.d.get("headline") or "")
-        return (f'<svg viewBox="0 0 {self.total_w} {self.total_h}" role="img" aria-label="{aria}">'
+        return (f'<svg viewBox="0 0 {self.total_w} {self.total_h}" width="{self.total_w}" height="{self.total_h}" '
+                f'role="img" aria-label="{aria}">'
                 f'<defs>{markers}</defs>{heads}{nodes}{edges}{legend}</svg>')
 
     def svg_legend(self):
@@ -367,7 +448,8 @@ class Flow:
         meta = " · ".join(filter(None, [f'{self.repo}#{d.get("number")}' if self.repo else None,
                                         f"head {self.head[:8]}" if self.head else None]))
         hint = d.get("hint", "Cliquer une boîte (ou une ligne du tableau) ouvre le code concerné : hunks du diff, "
-                              "et extraits hors diff avec les lignes qui comptent surlignées. Échap ferme.")
+                              "et extraits hors diff avec les lignes qui comptent surlignées. Échap ferme. "
+                              "Le schéma se déplace à la souris et se zoome avec Ctrl + molette.")
         return f"""<title>{esc(d.get("title") or "PR flow")}</title>
 <style>
   :root {{ --bg:#f3f5f8; --surface:#fff; --ink:#1a222d; --muted:#5d6877; --line:#c9d0da; --off:#9aa3ae;
@@ -391,20 +473,31 @@ class Flow:
   h1 code {{ font-size:.9em; font-weight:500; }}
   .lede {{ color:var(--muted); max-width:72ch; margin:0; }}
   .hint {{ font-size:13px; color:var(--muted); margin:0; }}
-  figure {{ margin:0; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:16px; }}
-  .scroll {{ overflow-x:auto; }}
-  figure svg {{ display:block; min-width:{min(self.total_w, 1180)}px; max-width:100%; height:auto; }}
+  /* The diagram is a canvas: full viewport width, 1:1 by default so the text keeps its size,
+     pan by dragging, zoom with ctrl/⌘ + wheel or the buttons. */
+  figure {{ margin:0; width:calc(100vw - 32px); margin-left:calc(50% - 50vw + 16px);
+            background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:12px 12px 14px; }}
+  .bar {{ display:flex; align-items:center; gap:6px; margin-bottom:8px; font-size:12px; color:var(--muted); }}
+  .bar button {{ font:inherit; font-size:12px; color:var(--ink); background:var(--bg); border:1px solid var(--line);
+                 border-radius:4px; padding:2px 9px; cursor:pointer; min-width:30px; }}
+  .bar button:hover {{ border-color:var(--muted); }}
+  .bar .pct {{ min-width:46px; text-align:center; font-family:"IBM Plex Mono",Menlo,monospace; color:var(--ink); }}
+  .bar .tip {{ margin-left:auto; }}
+  .canvas {{ position:relative; overflow:hidden; height:min(80vh, {self.total_h + 40}px); min-height:320px;
+             background:var(--bg); border:1px solid var(--line); border-radius:4px; cursor:grab; touch-action:none; }}
+  .canvas.drag {{ cursor:grabbing; }}
+  .canvas svg {{ position:absolute; left:0; top:0; transform-origin:0 0; display:block; }}
   figcaption {{ color:var(--muted); font-size:13px; margin-top:10px; max-width:90ch; }}
   .box {{ fill:var(--surface); stroke:var(--line); stroke-width:1; rx:4; }}
   .box.off {{ stroke:var(--off); stroke-dasharray:3 3; }}
   .box.note {{ fill:var(--note); stroke:var(--note-line); stroke-dasharray:4 3; }}
   .box.band {{ fill:var(--surface); stroke:var(--line); }}
-  svg text {{ fill:var(--ink); font-family:"IBM Plex Mono",Menlo,monospace; font-size:10.5px; }}
-  svg text.t {{ font-size:12px; font-weight:500; }}
-  svg text.sub {{ fill:var(--muted); font-size:10px; }}
+  svg text {{ fill:var(--ink); font-family:"IBM Plex Mono",Menlo,monospace; font-size:11.5px; }}
+  svg text.t {{ font-size:13px; font-weight:500; }}
+  svg text.sub {{ fill:var(--muted); font-size:10.5px; }}
   svg text.sans {{ font-family:"IBM Plex Sans",Arial,sans-serif; }}
   svg text.head {{ font-family:"IBM Plex Sans",Arial,sans-serif; font-size:11px; letter-spacing:.08em; text-transform:uppercase; fill:var(--muted); font-weight:500; }}
-  svg text.lab {{ font-size:10px; fill:var(--muted); }}
+  svg text.lab {{ font-size:10.5px; fill:var(--muted); }}
   svg text.off {{ fill:var(--off); }}
   .edge {{ fill:none; stroke:var(--ink); stroke-width:1.2; }}
   .edge.dash {{ stroke-dasharray:5 4; }}
@@ -461,7 +554,16 @@ class Flow:
     {"".join(f'<p class="lede">{rich(p)}</p>' for p in as_list(d.get("lede")))}
     {f'<p class="hint">{rich(hint)}</p>' if hint else ""}
   </header>
-  <figure><div class="scroll">{self.svg()}</div>
+  <figure>
+    <div class="bar">
+      <button type="button" data-zoom="out" aria-label="Zoom arrière">−</button>
+      <span class="pct" id="pct">100 %</span>
+      <button type="button" data-zoom="in" aria-label="Zoom avant">+</button>
+      <button type="button" data-zoom="one">100 %</button>
+      <button type="button" data-zoom="fit">Ajuster</button>
+      <span class="tip">glisser pour déplacer · Ctrl + molette pour zoomer · double-clic : 100 %</span>
+    </div>
+    <div class="canvas" id="canvas">{self.svg()}</div>
     {f'<figcaption>{rich(d.get("caption"))}</figcaption>' if d.get("caption") else ""}</figure>
   {self.table()}
   {self.reading()}
@@ -481,9 +583,61 @@ class Flow:
     body.innerHTML = ''; body.appendChild(tpl.content.cloneNode(true)); body.scrollTop = 0;
     if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
   }}
+  /* ---- canvas: pan and zoom, 1:1 by default ---- */
+  var canvas = document.getElementById('canvas'), svg = canvas.querySelector('svg'), pct = document.getElementById('pct');
+  var W = {self.total_w}, H = {self.total_h}, k = 1, tx = 0, ty = 0, dragged = false;
+  function apply() {{
+    svg.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + k + ')';
+    pct.textContent = Math.round(k * 100) + ' %';
+  }}
+  function center() {{
+    var cw = canvas.clientWidth, ch = canvas.clientHeight;
+    tx = W * k < cw ? (cw - W * k) / 2 : Math.min(0, Math.max(tx, cw - W * k));
+    ty = H * k < ch ? (ch - H * k) / 2 : Math.min(0, Math.max(ty, ch - H * k));
+  }}
+  function setZoom(nk, px, py) {{
+    nk = Math.min(3, Math.max(0.25, nk));
+    if (px === undefined) {{ px = canvas.clientWidth / 2; py = canvas.clientHeight / 2; }}
+    tx = px - (px - tx) * (nk / k); ty = py - (py - ty) * (nk / k); k = nk;
+    center(); apply();
+  }}
+  function fit() {{ k = Math.min(canvas.clientWidth / W, canvas.clientHeight / H); tx = ty = 0; center(); apply(); }}
+  function one() {{ k = 1; tx = ty = 0; center(); apply(); }}
+  document.querySelectorAll('.bar button').forEach(function (b) {{
+    b.addEventListener('click', function () {{
+      var z = b.getAttribute('data-zoom');
+      if (z === 'in') setZoom(k * 1.25); else if (z === 'out') setZoom(k / 1.25); else if (z === 'fit') fit(); else one();
+    }});
+  }});
+  canvas.addEventListener('wheel', function (e) {{
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    var r = canvas.getBoundingClientRect();
+    setZoom(k * (e.deltaY < 0 ? 1.12 : 1 / 1.12), e.clientX - r.left, e.clientY - r.top);
+  }}, {{ passive: false }});
+  canvas.addEventListener('dblclick', function (e) {{ if (!e.target.closest('[data-node]')) one(); }});
+  var start = null;
+  canvas.addEventListener('pointerdown', function (e) {{
+    if (e.button !== 0) return;
+    start = {{ x: e.clientX, y: e.clientY, tx: tx, ty: ty }}; dragged = false;
+    canvas.setPointerCapture(e.pointerId);
+  }});
+  canvas.addEventListener('pointermove', function (e) {{
+    if (!start) return;
+    var dx = e.clientX - start.x, dy = e.clientY - start.y;
+    if (!dragged && Math.abs(dx) + Math.abs(dy) < 4) return;
+    dragged = true; canvas.classList.add('drag');
+    tx = start.tx + dx; ty = start.ty + dy; apply();
+  }});
+  function endDrag() {{ start = null; canvas.classList.remove('drag'); center(); apply(); }}
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  window.addEventListener('resize', function () {{ center(); apply(); }});
+  one();
+
   document.querySelectorAll('[data-node]').forEach(function (el) {{
     if (el.tagName.toLowerCase() === 'template') return;
-    el.addEventListener('click', function () {{ open(el.getAttribute('data-node')); }});
+    el.addEventListener('click', function () {{ if (dragged) return; open(el.getAttribute('data-node')); }});
     el.addEventListener('keydown', function (e) {{ if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); open(el.getAttribute('data-node')); }} }});
   }});
   document.getElementById('dlg-close').addEventListener('click', function () {{ dlg.close(); }});

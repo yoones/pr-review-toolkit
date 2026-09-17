@@ -12,8 +12,10 @@ model I review against.
 
 Output: **one self-contained HTML file per PR**, opened in my browser: a left-to-right SVG diagram
 where **every box is clickable** and opens a modal carrying the code it stands for — the diff
-hunks, verbatim, and the out-of-diff excerpts with the lines that matter highlighted. The page
-embeds the repository's code verbatim: it stays a local file, never published or uploaded.
+hunks, verbatim, and the out-of-diff excerpts with the lines that matter highlighted. The diagram
+sits in a full-width canvas at 1:1 (the text keeps its size whatever the diagram's width), panned
+by dragging and zoomed with Ctrl + wheel or the toolbar. The page embeds the repository's code
+verbatim: it stays a local file, never published or uploaded.
 
 ## The rules carried over from `pr-brief` — all of them apply
 
@@ -49,7 +51,10 @@ Draw as the engineer who has to live with the code, not as a decorator.
   Both open modals like any other box — the note shows the two pieces of code side by side.
 - **Match complexity to the stakes.** A one-hop PR is three boxes; don't inventory the system.
   Grep before drawing: every box must correspond to code you have opened.
-- **Label the arrows.** An unlabelled arrow is "related somehow".
+- **Label the arrows.** An unlabelled arrow is "related somehow". Keep labels short: the gap
+  between two columns widens to the longest label that crosses it, so a 40-character label costs
+  250 px of width. A `none` edge's label is drawn inside its box, prefixed with ∅.
+- **Titles and lines wrap** to the box width and the box grows; still, one idea per line.
 
 Tones trace paths: `a`/`b`/`c` for the distinct trigger paths (one hue per path, consistently
 from entry to effect), `off` for boxes that lead nowhere, `note`, `band`, `plain`. Edge kinds:
