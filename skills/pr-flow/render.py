@@ -547,10 +547,14 @@ class Flow:
   .canvas {{ position:relative; overflow:hidden; height:min(80vh, {self.total_h + 40}px); min-height:320px;
              background:var(--bg); border:1px solid var(--line); border-radius:4px; cursor:grab; touch-action:none; }}
   .canvas.drag {{ cursor:grabbing; }}
-  figure:fullscreen {{ width:100vw; margin:0; padding:0; background:var(--bg);
-    display:flex; flex-direction:column; border-radius:0; }}
-  figure:fullscreen .canvas {{ height:auto; flex:1 1 auto; min-height:0; border-radius:0; border-left:0; border-right:0; }}
-  figure:fullscreen figcaption {{ padding:8px 16px; }}
+  /* Plein cadre par classe, pas via l'API Fullscreen : le navigateur réserve Échap pour
+     sortir de son plein écran et ne laisse pas la page annuler ce geste, ce qui volerait la
+     touche à la modale de code. Ici l'ordre des priorités sur Échap reste entièrement à nous. */
+  figure.fullpage {{ position:fixed; inset:0; z-index:50; width:100vw; margin:0; padding:0;
+    background:var(--bg); display:flex; flex-direction:column; border-radius:0; }}
+  figure.fullpage .canvas {{ height:auto; flex:1 1 auto; min-height:0; border-radius:0; border-left:0; border-right:0; }}
+  figure.fullpage figcaption {{ padding:8px 16px; }}
+  body.fullpage-on {{ overflow:hidden; }}
   /* overflow:visible so a box dragged past the diagram's own bounds still paints;
      the frame that clips is .canvas, not the svg viewport. */
   .canvas svg {{ position:absolute; left:0; top:0; transform-origin:0 0; display:block; overflow:visible; }}
@@ -852,15 +856,15 @@ class Flow:
     OFF = {{}}; rerouteAll(); one();
   }}
   var fig = canvas.closest('figure'), fullBtn = document.getElementById('full');
-  function toggleFull() {{
-    if (document.fullscreenElement) {{ if (document.exitFullscreen) document.exitFullscreen(); }}
-    else if (fig.requestFullscreen) {{ var r = fig.requestFullscreen(); if (r && r.catch) r.catch(function () {{}}); }}
-  }}
-  document.addEventListener('fullscreenchange', function () {{
-    var on = document.fullscreenElement === fig;
+  function isFull() {{ return fig.classList.contains('fullpage'); }}
+  function setFull(on) {{
+    fig.classList.toggle('fullpage', on);
+    document.body.classList.toggle('fullpage-on', on);
     fullBtn.textContent = on ? 'Quitter le plein écran' : 'Plein écran';
+    fullBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
     apply();
-  }});
+  }}
+  function toggleFull() {{ setFull(!isFull()); }}
   document.querySelectorAll('.bar button').forEach(function (b) {{
     b.addEventListener('click', function () {{
       if (b.getAttribute('data-act') === 'full') {{ toggleFull(); return; }}
@@ -938,14 +942,13 @@ class Flow:
       if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); e.stopPropagation(); drop(el.getAttribute('data-del')); }}
     }});
   }});
-  /* Escape is claimed by three things: the code dialog, fullscreen and the isolation.
-     Taken in the capture phase and cancelled, so the browser's own close requests — the
-     dialog's and fullscreen's — are both suppressed and the order below is the one that
-     applies, whatever the browser would otherwise arbitrate. */
+  /* Escape is claimed by three things: the code dialog, the full-frame view and the
+     isolation. Taken in the capture phase and cancelled, so the dialog's own close request
+     never fires twice, and handled in this order. */
   window.addEventListener('keydown', function (e) {{
     if (e.key !== 'Escape') return;
     if (dlg.open) {{ e.preventDefault(); e.stopPropagation(); dlg.close(); return; }}
-    if (document.fullscreenElement) return;   /* nothing of ours to close: let it leave fullscreen */
+    if (isFull()) {{ e.preventDefault(); setFull(false); return; }}
     if (isoId) clearIso();
   }}, true);
   document.getElementById('dlg-close').addEventListener('click', function () {{ dlg.close(); }});

@@ -22,8 +22,9 @@ also be dragged** to pull apart edge labels that sit on top of each other; its w
 diagram sits in a full-width canvas at 1:1 (the text keeps its size whatever the diagram's width),
 panned by dragging the background — without bounds, the diagram may be taken clean off the frame —
 and zoomed with Ctrl + wheel or the toolbar. A **Réinitialiser** button puts every box back, clears
-the isolation and returns to 100 %, and a **Plein écran** button gives the canvas the whole screen,
-toolbar included. The page embeds the repository's code verbatim: it stays a local file, never
+the isolation and returns to 100 %, and a **Plein écran** button gives the canvas the whole window,
+toolbar included — a CSS overlay rather than the Fullscreen API, so that Escape closes the code
+dialog first and only then leaves the view. The page embeds the repository's code verbatim: it stays a local file, never
 published or uploaded.
 
 ## The rules carried over from `pr-brief` — all of them apply
