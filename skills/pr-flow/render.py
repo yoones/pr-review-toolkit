@@ -547,7 +547,9 @@ class Flow:
   .canvas {{ position:relative; overflow:hidden; height:min(80vh, {self.total_h + 40}px); min-height:320px;
              background:var(--bg); border:1px solid var(--line); border-radius:4px; cursor:grab; touch-action:none; }}
   .canvas.drag {{ cursor:grabbing; }}
-  .canvas svg {{ position:absolute; left:0; top:0; transform-origin:0 0; display:block; }}
+  /* overflow:visible so a box dragged past the diagram's own bounds still paints;
+     the frame that clips is .canvas, not the svg viewport. */
+  .canvas svg {{ position:absolute; left:0; top:0; transform-origin:0 0; display:block; overflow:visible; }}
   figcaption {{ color:var(--muted); font-size:13px; margin-top:10px; max-width:90ch; }}
   .box {{ fill:var(--surface); stroke:var(--line); stroke-width:1; rx:4; }}
   .box.off {{ stroke:var(--off); stroke-dasharray:3 3; }}
