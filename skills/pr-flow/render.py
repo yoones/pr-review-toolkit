@@ -819,19 +819,22 @@ class Flow:
     svg.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + k + ')';
     pct.textContent = Math.round(k * 100) + ' %';
   }}
-  function center() {{
+  /* Panning is deliberately unbounded: the diagram may be dragged clean off the frame.
+     `home` is the starting placement only, used by the 100 %, Ajuster and Réinitialiser
+     buttons — centred when the diagram is smaller than the canvas, top-left otherwise. */
+  function home() {{
     var cw = canvas.clientWidth, ch = canvas.clientHeight;
-    tx = W * k < cw ? (cw - W * k) / 2 : Math.min(0, Math.max(tx, cw - W * k));
-    ty = H * k < ch ? (ch - H * k) / 2 : Math.min(0, Math.max(ty, ch - H * k));
+    tx = W * k < cw ? (cw - W * k) / 2 : 0;
+    ty = H * k < ch ? (ch - H * k) / 2 : 0;
   }}
   function setZoom(nk, px, py) {{
     nk = Math.min(3, Math.max(0.25, nk));
     if (px === undefined) {{ px = canvas.clientWidth / 2; py = canvas.clientHeight / 2; }}
     tx = px - (px - tx) * (nk / k); ty = py - (py - ty) * (nk / k); k = nk;
-    center(); apply();
+    apply();
   }}
-  function fit() {{ k = Math.min(canvas.clientWidth / W, canvas.clientHeight / H); tx = ty = 0; center(); apply(); }}
-  function one() {{ k = 1; tx = ty = 0; center(); apply(); }}
+  function fit() {{ k = Math.min(canvas.clientWidth / W, canvas.clientHeight / H); home(); apply(); }}
+  function one() {{ k = 1; home(); apply(); }}
   function resetAll() {{
     clearIso();
     GONE = {{}}; paintGone();
@@ -893,11 +896,11 @@ class Flow:
   function endDrag() {{
     if (nodeDrag) {{ nodeDrag = null; canvas.classList.remove('nodedrag'); return; }}
     if (!start) return;
-    start = null; canvas.classList.remove('drag'); center(); apply();
+    start = null; canvas.classList.remove('drag'); apply();
   }}
   window.addEventListener('pointerup', endDrag);
   window.addEventListener('pointercancel', endDrag);
-  window.addEventListener('resize', function () {{ center(); apply(); }});
+  window.addEventListener('resize', apply);
   one();
 
   document.querySelectorAll('[data-node]').forEach(function (el) {{
