@@ -27,7 +27,8 @@ NODE_GAP, PAD = 10, 10
 LINE_H, TITLE_H = 16, 20
 TITLE_EXTRA_H = 18          # each wrapped title line after the first
 NONE_STUB_W = 90            # stub + ∅ circle of a `none` edge; its label is drawn inside the box
-CUE_W = 44                  # room kept free of the title for the "diff ›" cue
+CUE_W = 62                  # room kept free of the title for the cue and the isolate handle
+LABEL_STAGGER = 13          # several labels sharing one anchor are stacked by this much
 
 # Estimated advance width per character, by text class, in px. SVG text cannot wrap by
 # itself, so the layout wraps every title and line to the box width from these figures
@@ -160,9 +161,36 @@ class Flow:
                 cursor[col] = y + h + NODE_GAP
             self.rect[node["id"]] = (nx, y, nw, h)
             self.text[node["id"]] = (title_lines, lines)
+        self.label_dy = self.stagger_labels()
         bottom = max((r[1] + r[3] for r in self.rect.values()), default=Y0)
         self.legend_y = bottom + 34
         self.total_h = self.legend_y + 14
+
+    def stagger_labels(self):
+        """Every edge leaving a box starts at the middle of its right border, so several
+        labelled edges from the same box would print their labels on the very same pixel.
+        Stack them upwards instead; the gap they sit in is empty."""
+        dy, seen = {}, {}
+        for index, edge in enumerate(self.edges):
+            if not edge.get("label") or edge.get("kind") == "none":
+                continue
+            src, dst = edge.get("from"), edge.get("to")
+            if dst is None or src not in self.rect or dst not in self.rect:
+                continue
+            ax, ay, aw, ah = self.rect[src]
+            bx, by, bw, bh = self.rect[dst]
+            if ax + aw <= bx:
+                at = edge.get("label_at")
+                key = ("end", dst) if at == "end" else (("vert", src, dst) if at == "vertical" else ("start", src))
+            elif bx + bw <= ax:
+                key = ("rl", src)
+            else:
+                key = ("col", src, dst)
+            rank = seen.get(key, 0)
+            seen[key] = rank + 1
+            if rank:
+                dy[index] = -LABEL_STAGGER * rank
+        return dy
 
     def wrap_node(self, node, width):
         """Wrap the title and every line to the box width. Returns (title_lines, [(cls, text)])."""
@@ -204,11 +232,17 @@ class Flow:
             out.append(f'<text class="{lcls}" x="{x + 10}" y="{ty}">{esc(piece)}</text>')
             ty += LINE_H
         if has_modal:
-            out.append(f'<text class="cue" x="{x + w - 8}" y="{y + 12}" text-anchor="end">{esc(cue)} ›</text>')
-            label = esc(node.get("modal_title") or node.get("title"))
-            return (f'<g class="node" data-node="{esc(node["id"])}" tabindex="0" role="button" '
-                    f'aria-label="Ouvrir le code : {label}">{"".join(out)}</g>')
-        return f'<g>{"".join(out)}</g>'
+            out.append(f'<text class="cue" x="{x + w - 30}" y="{y + 12}" text-anchor="end">{esc(cue)} ›</text>')
+        title_txt = esc(node.get("title") or node["id"])
+        out.append(f'<g class="iso" data-iso="{esc(node["id"])}" role="button" tabindex="0" '
+                   f'aria-label="Isoler le sous-flux : {title_txt}">'
+                   f'<circle class="isob" cx="{x + w - 13}" cy="{y + 11}" r="7.5"/>'
+                   f'<circle class="isod" cx="{x + w - 13}" cy="{y + 11}" r="2.6"/></g>')
+        label = esc(node.get("modal_title") or node.get("title") or node["id"])
+        aria = f"Ouvrir le code : {label}" if has_modal else label
+        modal = ' data-modal="1"' if has_modal else ""
+        return (f'<g class="node" data-node="{esc(node["id"])}" transform="translate(0,0)" '
+                f'tabindex="0" role="button" aria-label="{aria}"{modal}>{"".join(out)}</g>')
 
     def default_elbow(self, edge, sx, ex):
         """Elbow of a left-to-right edge: mid-gap when the columns are adjacent, else in the
@@ -219,7 +253,11 @@ class Flow:
             return sx + self.gap_after[src] // 2
         return sx + (ex - sx) // 2
 
-    def svg_edge(self, edge):
+    def svg_edge(self, edge, index=0):
+        return (f'<g class="ew" data-edge="{index}">'
+                f'{self.svg_edge_inner(edge, self.label_dy.get(index, 0))}</g>')
+
+    def svg_edge_inner(self, edge, dy=0):
         a = self.rect[edge["from"]]
         tone = edge.get("tone") or "k"
         kind = edge.get("kind") or "solid"
@@ -248,12 +286,12 @@ class Flow:
             else:
                 mx = int(edge.get("elbow_x") or self.default_elbow(edge, sx, ex))
                 d = f"M{sx} {sy} H{mx} V{ty} H{ex}"
-            lx, ly, anchor = sx + 6, sy - 5, "start"
+            lx, ly, anchor = sx + 6, sy - 5 + dy, "start"
             if edge.get("label_at") == "end":
-                lx, ly, anchor = ex - 6, ty - 5, "end"
+                lx, ly, anchor = ex - 6, ty - 5 + dy, "end"
             elif edge.get("label_at") == "vertical" and sy != ty:
                 mx = int(edge.get("elbow_x") or self.default_elbow(edge, sx, ex))
-                my = (sy + ty) // 2
+                my = (sy + ty) // 2 + dy
                 parts.append(f'<path class="{cls}" d="{d}" marker-end="{marker}"/>')
                 parts.append(f'<text class="lab {esc(tone) if tone in self.tones else ""}" x="{mx + 6}" y="{my}" '
                              f'transform="rotate(-90 {mx + 6} {my})" text-anchor="middle">{esc(label)}</text>')
@@ -264,7 +302,7 @@ class Flow:
             ex = bx + bw
             mx = sx - (sx - ex) // 2
             d = f"M{sx} {sy} H{mx} V{ty} H{ex}" if sy != ty else f"M{sx} {sy} H{ex}"
-            lx, ly, anchor = sx - 6, sy - 5, "end"
+            lx, ly, anchor = sx - 6, sy - 5 + dy, "end"
         else:  # same column: vertical
             sx = ax + aw // 2
             if by >= ay + ah:
@@ -272,7 +310,7 @@ class Flow:
             else:
                 sy, ey = ay, by + bh
             d = f"M{sx} {sy} V{ey}"
-            lx, ly, anchor = sx + 8, (sy + ey) // 2 + 4, "start"
+            lx, ly, anchor = sx + 8, (sy + ey) // 2 + 4 + dy, "start"
         parts.append(f'<path class="{cls}" d="{d}" marker-end="{marker}"/>')
         if label:
             parts.append(f'<text class="lab" x="{lx}" y="{ly}" text-anchor="{anchor}">{esc(label)}</text>')
@@ -286,12 +324,25 @@ class Flow:
         heads = "".join(f'<text class="head" x="{self.col_x[c["id"]]}" y="24">{esc(c.get("head"))}</text>'
                         for c in self.columns)
         nodes = "".join(self.svg_node(n) for n in self.nodes)
-        edges = "".join(self.svg_edge(e) for e in self.edges)
+        edges = "".join(self.svg_edge(e, i) for i, e in enumerate(self.edges))
         legend = self.svg_legend()
         aria = esc(self.d.get("aria") or self.d.get("headline") or "")
         return (f'<svg viewBox="0 0 {self.total_w} {self.total_h}" width="{self.total_w}" height="{self.total_h}" '
                 f'role="img" aria-label="{aria}">'
                 f'<defs>{markers}</defs>{heads}{nodes}{edges}{legend}</svg>')
+
+    def js_data(self):
+        """Geometry the page needs to re-route edges after a node is dragged."""
+        edges = [{"from": e.get("from"), "to": e.get("to"),
+                  "kind": e.get("kind") or "solid", "tone": e.get("tone") or "k",
+                  "label": e.get("label"), "label_at": e.get("label_at"),
+                  "to_y": e.get("to_y"), "elbow_x": e.get("elbow_x"),
+                  "label_dy": self.label_dy.get(i, 0)} for i, e in enumerate(self.edges)]
+        return json.dumps({"rect": {k: list(v) for k, v in self.rect.items()},
+                           "col": {n["id"]: n.get("col") for n in self.nodes},
+                           "gap": self.gap_after,
+                           "tones": list(self.tones),
+                           "edges": edges}, ensure_ascii=False)
 
     def svg_legend(self):
         y = self.legend_y
@@ -447,9 +498,12 @@ class Flow:
         d = self.d
         meta = " · ".join(filter(None, [f'{self.repo}#{d.get("number")}' if self.repo else None,
                                         f"head {self.head[:8]}" if self.head else None]))
-        hint = d.get("hint", "Cliquer une boîte (ou une ligne du tableau) ouvre le code concerné : hunks du diff, "
-                              "et extraits hors diff avec les lignes qui comptent surlignées. Échap ferme. "
-                              "Le schéma se déplace à la souris et se zoome avec Ctrl + molette.")
+        hint = d.get("hint", "Chaque boîte offre deux gestes : la cliquer ouvre le code concerné, hunks du diff "
+                              "et extraits hors diff avec les lignes qui comptent surlignées ; cliquer la cible ◎ "
+                              "dans son coin isole son sous-flux, tout ce qui mène à elle et tout ce qu'elle atteint, "
+                              "le reste passant en gris clair. Une boîte se déplace en la glissant, ce qui dégage les "
+                              "étiquettes de flèches qui se recouvrent. Le bouton Réinitialiser rend l'état de départ. "
+                              "Échap ferme le code.")
         return f"""<title>{esc(d.get("title") or "PR flow")}</title>
 <style>
   :root {{ --bg:#f3f5f8; --surface:#fff; --ink:#1a222d; --muted:#5d6877; --line:#c9d0da; --off:#9aa3ae;
@@ -511,6 +565,18 @@ class Flow:
   g.node:focus-visible .box {{ stroke:var(--focus); }}
   g.node .cue {{ fill:var(--muted); font-size:9px; opacity:0; transition:opacity .12s; }}
   g.node:hover .cue, g.node:focus-visible .cue {{ opacity:1; }}
+  g.node .iso {{ cursor:pointer; opacity:.4; transition:opacity .12s; }}
+  g.node:hover .iso, g.node:focus-visible .iso, g.node.iso-on .iso, .iso:focus-visible {{ opacity:1; }}
+  .isob {{ fill:var(--surface); stroke:var(--muted); stroke-width:1.2; }}
+  .isod {{ fill:var(--muted); }}
+  .iso:hover .isob, g.node.iso-on .isob {{ stroke:var(--focus); }}
+  .iso:hover .isod, g.node.iso-on .isod {{ fill:var(--focus); }}
+  g.node.iso-on .box {{ stroke-width:2.4; }}
+  g.node.dim, g.ew.dim {{ opacity:.12; filter:grayscale(1); }}
+  g.node.dim {{ pointer-events:none; }}
+  g.node.moved .box {{ stroke-dasharray:none; }}
+  .canvas.nodedrag, .canvas.nodedrag * {{ cursor:grabbing; }}
+  @media (prefers-reduced-motion: reduce) {{ g.node .iso {{ transition:none; }} }}
   @media (prefers-reduced-motion: reduce) {{ g.node .box, g.node .cue {{ transition:none; }} }}
   section.table {{ margin-top:28px; }}
   h2 {{ font-size:16px; font-weight:600; margin:0 0 10px; }}
@@ -561,7 +627,8 @@ class Flow:
       <button type="button" data-zoom="in" aria-label="Zoom avant">+</button>
       <button type="button" data-zoom="one">100 %</button>
       <button type="button" data-zoom="fit">Ajuster</button>
-      <span class="tip">glisser pour déplacer · Ctrl + molette pour zoomer · double-clic : 100 %</span>
+      <button type="button" data-act="reset" id="reset">Réinitialiser</button>
+      <span class="tip">cliquer une boîte : son code · la cible ◎ : isoler son sous-flux · glisser une boîte pour la déplacer · Ctrl + molette : zoom</span>
     </div>
     <div class="canvas" id="canvas">{self.svg()}</div>
     {f'<figcaption>{rich(d.get("caption"))}</figcaption>' if d.get("caption") else ""}</figure>
@@ -575,7 +642,15 @@ class Flow:
 {self.templates()}
 <script>
 (function () {{
+  var DATA = {self.js_data()};
+  var RECT = DATA.rect, NCOL = DATA.col, GAP = DATA.gap, TONES = DATA.tones, EDGES = DATA.edges;
+  var OFF = {{}};
   var dlg = document.getElementById('dlg'), body = document.getElementById('dlg-body'), title = document.getElementById('dlg-title');
+  var canvas = document.getElementById('canvas'), svg = canvas.querySelector('svg'), pct = document.getElementById('pct');
+  var nodeEls = {{}}, edgeEls = {{}};
+  document.querySelectorAll('g.node').forEach(function (g) {{ nodeEls[g.getAttribute('data-node')] = g; }});
+  document.querySelectorAll('g.ew').forEach(function (g) {{ edgeEls[g.getAttribute('data-edge')] = g; }});
+
   function open(id) {{
     var tpl = document.querySelector('template[data-node="' + id + '"]');
     if (!tpl) return;
@@ -583,8 +658,108 @@ class Flow:
     body.innerHTML = ''; body.appendChild(tpl.content.cloneNode(true)); body.scrollTop = 0;
     if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
   }}
+
+  /* ---- edge routing, ported from the Python layout so a dragged box keeps its wires ---- */
+  function xesc(s) {{ return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }}
+  function offOf(id) {{ return OFF[id] || [0, 0]; }}
+  function rectOf(id) {{ var r = RECT[id], o = offOf(id); return [r[0] + o[0], r[1] + o[1], r[2], r[3]]; }}
+  function elbowOf(e, sx, ex) {{
+    var g = GAP[NCOL[e.from]];
+    if (g !== undefined && sx + g < ex) return sx + Math.floor(g / 2);
+    return sx + Math.floor((ex - sx) / 2);
+  }}
+  function given(v) {{ return v !== null && v !== undefined; }}
+  function labCls(tone) {{ return 'lab' + (TONES.indexOf(tone) >= 0 ? ' ' + tone : ''); }}
+
+  function edgeHTML(e) {{
+    var a = rectOf(e.from), ax = a[0], ay = a[1], aw = a[2], ah = a[3];
+    var tone = e.tone || 'k', kind = e.kind || 'solid', label = e.label, dy = e.label_dy || 0;
+    if (kind === 'none') {{
+      var ny = ay + Math.floor(ah / 2), nx = ax + aw;
+      return '<path class="edge off" d="M' + nx + ' ' + ny + ' H' + (nx + 62) + '"/>'
+           + '<circle class="nil" cx="' + (nx + 72) + '" cy="' + ny + '" r="6"/>'
+           + '<line class="nil" x1="' + (nx + 68) + '" y1="' + (ny + 4) + '" x2="' + (nx + 76) + '" y2="' + (ny - 4) + '"/>';
+    }}
+    var b = rectOf(e.to), bx = b[0], by = b[1], bw = b[2], bh = b[3];
+    var cls = 'edge ' + tone + (kind === 'dash' ? ' dash' : '');
+    var marker = 'url(#a-' + tone + ')';
+    var d, lx, ly, anchor;
+    if (ax + aw <= bx) {{
+      var sx = ax + aw, sy = ay + Math.floor(ah / 2), ex = bx;
+      var ty = Math.min(Math.max(sy, by + 12), by + bh - 12);
+      if (given(e.to_y)) ty = Math.trunc(e.to_y) + offOf(e.to)[1];
+      var mx = given(e.elbow_x) ? Math.trunc(e.elbow_x) : elbowOf(e, sx, ex);
+      d = (sy === ty) ? ('M' + sx + ' ' + sy + ' H' + ex)
+                      : ('M' + sx + ' ' + sy + ' H' + mx + ' V' + ty + ' H' + ex);
+      lx = sx + 6; ly = sy - 5 + dy; anchor = 'start';
+      if (e.label_at === 'end') {{ lx = ex - 6; ly = ty - 5 + dy; anchor = 'end'; }}
+      else if (e.label_at === 'vertical' && sy !== ty) {{
+        var my = Math.floor((sy + ty) / 2) + dy;
+        return '<path class="' + cls + '" d="' + d + '" marker-end="' + marker + '"/>'
+             + '<text class="' + labCls(tone) + '" x="' + (mx + 6) + '" y="' + my
+             + '" transform="rotate(-90 ' + (mx + 6) + ' ' + my + ')" text-anchor="middle">' + xesc(label) + '</text>';
+      }}
+    }} else if (bx + bw <= ax) {{
+      var sx2 = ax, sy2 = ay + Math.floor(ah / 2), ex2 = bx + bw;
+      var ty2 = Math.min(Math.max(sy2, by + 12), by + bh - 12);
+      var mx2 = sx2 - Math.floor((sx2 - ex2) / 2);
+      d = (sy2 !== ty2) ? ('M' + sx2 + ' ' + sy2 + ' H' + mx2 + ' V' + ty2 + ' H' + ex2)
+                        : ('M' + sx2 + ' ' + sy2 + ' H' + ex2);
+      lx = sx2 - 6; ly = sy2 - 5 + dy; anchor = 'end';
+    }} else {{
+      var sx3 = ax + Math.floor(aw / 2), sy3, ey3;
+      if (by >= ay + ah) {{ sy3 = ay + ah; ey3 = by; }} else {{ sy3 = ay; ey3 = by + bh; }}
+      d = 'M' + sx3 + ' ' + sy3 + ' V' + ey3;
+      lx = sx3 + 8; ly = Math.floor((sy3 + ey3) / 2) + 4 + dy; anchor = 'start';
+    }}
+    var out = '<path class="' + cls + '" d="' + d + '" marker-end="' + marker + '"/>';
+    if (label) out += '<text class="lab" x="' + lx + '" y="' + ly + '" text-anchor="' + anchor + '">' + xesc(label) + '</text>';
+    return out;
+  }}
+  function reroute(id) {{
+    EDGES.forEach(function (e, i) {{
+      if (e.from !== id && e.to !== id) return;
+      if (edgeEls[i]) edgeEls[i].innerHTML = edgeHTML(e);
+    }});
+  }}
+  function rerouteAll() {{ EDGES.forEach(function (e, i) {{ if (edgeEls[i]) edgeEls[i].innerHTML = edgeHTML(e); }}); }}
+
+  /* ---- subflow: everything that leads to a box and everything it reaches ---- */
+  var FWD = {{}}, BWD = {{}};
+  EDGES.forEach(function (e) {{
+    if (!e.to) return;
+    (FWD[e.from] = FWD[e.from] || []).push(e.to);
+    (BWD[e.to] = BWD[e.to] || []).push(e.from);
+  }});
+  function reach(id, map) {{
+    var seen = {{}}, stack = [id];
+    while (stack.length) {{
+      var cur = stack.pop();
+      (map[cur] || []).forEach(function (n) {{ if (!seen[n]) {{ seen[n] = 1; stack.push(n); }} }});
+    }}
+    return seen;
+  }}
+  var isoId = null;
+  function clearIso() {{
+    isoId = null;
+    Object.keys(nodeEls).forEach(function (k2) {{ nodeEls[k2].classList.remove('dim', 'iso-on'); }});
+    Object.keys(edgeEls).forEach(function (k2) {{ edgeEls[k2].classList.remove('dim'); }});
+  }}
+  function isolate(id) {{
+    if (isoId === id) {{ clearIso(); return; }}
+    clearIso(); isoId = id;
+    var set = {{}}; set[id] = 1;
+    Object.keys(reach(id, FWD)).forEach(function (n) {{ set[n] = 1; }});
+    Object.keys(reach(id, BWD)).forEach(function (n) {{ set[n] = 1; }});
+    Object.keys(nodeEls).forEach(function (n) {{ if (!set[n]) nodeEls[n].classList.add('dim'); }});
+    if (nodeEls[id]) nodeEls[id].classList.add('iso-on');
+    EDGES.forEach(function (e, i) {{
+      var keep = e.to ? (set[e.from] && set[e.to]) : !!set[e.from];
+      if (!keep && edgeEls[i]) edgeEls[i].classList.add('dim');
+    }});
+  }}
+
   /* ---- canvas: pan and zoom, 1:1 by default ---- */
-  var canvas = document.getElementById('canvas'), svg = canvas.querySelector('svg'), pct = document.getElementById('pct');
   var W = {self.total_w}, H = {self.total_h}, k = 1, tx = 0, ty = 0, dragged = false;
   function apply() {{
     svg.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + k + ')';
@@ -603,8 +778,17 @@ class Flow:
   }}
   function fit() {{ k = Math.min(canvas.clientWidth / W, canvas.clientHeight / H); tx = ty = 0; center(); apply(); }}
   function one() {{ k = 1; tx = ty = 0; center(); apply(); }}
+  function resetAll() {{
+    clearIso();
+    Object.keys(OFF).forEach(function (id) {{
+      var g = nodeEls[id];
+      if (g) {{ g.setAttribute('transform', 'translate(0,0)'); g.classList.remove('moved'); }}
+    }});
+    OFF = {{}}; rerouteAll(); one();
+  }}
   document.querySelectorAll('.bar button').forEach(function (b) {{
     b.addEventListener('click', function () {{
+      if (b.getAttribute('data-act') === 'reset') {{ resetAll(); return; }}
       var z = b.getAttribute('data-zoom');
       if (z === 'in') setZoom(k * 1.25); else if (z === 'out') setZoom(k / 1.25); else if (z === 'fit') fit(); else one();
     }});
@@ -616,22 +800,46 @@ class Flow:
     setZoom(k * (e.deltaY < 0 ? 1.12 : 1 / 1.12), e.clientX - r.left, e.clientY - r.top);
   }}, {{ passive: false }});
   canvas.addEventListener('dblclick', function (e) {{ if (!e.target.closest('[data-node]')) one(); }});
+
   /* No pointer capture: a captured pointer sends the click to the canvas, and the boxes
      would no longer open. The drag is followed on window instead. */
-  var start = null;
+  var start = null, nodeDrag = null;
+  document.addEventListener('pointerdown', function () {{ dragged = false; }}, true);
   canvas.addEventListener('pointerdown', function (e) {{
     if (e.button !== 0) return;
-    start = {{ x: e.clientX, y: e.clientY, tx: tx, ty: ty }}; dragged = false;
+    if (e.target.closest('.iso')) return;
+    var g = e.target.closest('g.node');
+    if (g) {{
+      var id = g.getAttribute('data-node'), o = offOf(id);
+      nodeDrag = {{ id: id, g: g, x: e.clientX, y: e.clientY, ox: o[0], oy: o[1] }};
+    }} else {{
+      start = {{ x: e.clientX, y: e.clientY, tx: tx, ty: ty }};
+    }}
     e.preventDefault();
   }});
   window.addEventListener('pointermove', function (e) {{
+    if (nodeDrag) {{
+      var ndx = e.clientX - nodeDrag.x, ndy = e.clientY - nodeDrag.y;
+      if (!dragged && Math.abs(ndx) + Math.abs(ndy) < 4) return;
+      dragged = true; canvas.classList.add('nodedrag');
+      var nx = nodeDrag.ox + ndx / k, ny = nodeDrag.oy + ndy / k;
+      OFF[nodeDrag.id] = [nx, ny];
+      nodeDrag.g.setAttribute('transform', 'translate(' + nx + ',' + ny + ')');
+      nodeDrag.g.classList.add('moved');
+      reroute(nodeDrag.id);
+      return;
+    }}
     if (!start) return;
     var dx = e.clientX - start.x, dy = e.clientY - start.y;
     if (!dragged && Math.abs(dx) + Math.abs(dy) < 4) return;
     dragged = true; canvas.classList.add('drag');
     tx = start.tx + dx; ty = start.ty + dy; apply();
   }});
-  function endDrag() {{ if (!start) return; start = null; canvas.classList.remove('drag'); center(); apply(); }}
+  function endDrag() {{
+    if (nodeDrag) {{ nodeDrag = null; canvas.classList.remove('nodedrag'); return; }}
+    if (!start) return;
+    start = null; canvas.classList.remove('drag'); center(); apply();
+  }}
   window.addEventListener('pointerup', endDrag);
   window.addEventListener('pointercancel', endDrag);
   window.addEventListener('resize', function () {{ center(); apply(); }});
@@ -642,6 +850,13 @@ class Flow:
     el.addEventListener('click', function () {{ if (dragged) return; open(el.getAttribute('data-node')); }});
     el.addEventListener('keydown', function (e) {{ if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); open(el.getAttribute('data-node')); }} }});
   }});
+  document.querySelectorAll('.iso').forEach(function (el) {{
+    el.addEventListener('click', function (e) {{ e.stopPropagation(); if (dragged) return; isolate(el.getAttribute('data-iso')); }});
+    el.addEventListener('keydown', function (e) {{
+      if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); e.stopPropagation(); isolate(el.getAttribute('data-iso')); }}
+    }});
+  }});
+  window.addEventListener('keydown', function (e) {{ if (e.key === 'Escape' && !dlg.open && isoId) clearIso(); }});
   document.getElementById('dlg-close').addEventListener('click', function () {{ dlg.close(); }});
   dlg.addEventListener('click', function (e) {{ if (e.target === dlg) dlg.close(); }});
 }})();

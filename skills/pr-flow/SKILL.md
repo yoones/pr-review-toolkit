@@ -11,11 +11,15 @@ a linear reading path (`pr-brief`) isn't enough. Reviewing is a separate pass; t
 model I review against.
 
 Output: **one self-contained HTML file per PR**, opened in my browser: a left-to-right SVG diagram
-where **every box is clickable** and opens a modal carrying the code it stands for — the diff
-hunks, verbatim, and the out-of-diff excerpts with the lines that matter highlighted. The diagram
-sits in a full-width canvas at 1:1 (the text keeps its size whatever the diagram's width), panned
-by dragging and zoomed with Ctrl + wheel or the toolbar. The page embeds the repository's code
-verbatim: it stays a local file, never published or uploaded.
+where **every box carries two gestures**: clicking its body opens a modal with the code it stands
+for — the diff hunks, verbatim, and the out-of-diff excerpts with the lines that matter highlighted
+— while clicking the target in its corner **isolates its subflow**, everything that leads to it and
+everything it reaches, transitively, the rest dropping to light grey. **A box can be dragged** to
+pull apart edge labels that sit on top of each other; its wires follow. The diagram sits in a
+full-width canvas at 1:1 (the text keeps its size whatever the diagram's width), panned by dragging
+the background and zoomed with Ctrl + wheel or the toolbar, and a **Réinitialiser** button restores
+the starting state. The page embeds the repository's code verbatim: it stays a local file, never
+published or uploaded.
 
 ## The rules carried over from `pr-brief` — all of them apply
 
