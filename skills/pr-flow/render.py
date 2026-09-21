@@ -547,6 +547,10 @@ class Flow:
   .canvas {{ position:relative; overflow:hidden; height:min(80vh, {self.total_h + 40}px); min-height:320px;
              background:var(--bg); border:1px solid var(--line); border-radius:4px; cursor:grab; touch-action:none; }}
   .canvas.drag {{ cursor:grabbing; }}
+  figure:fullscreen {{ width:100vw; margin:0; padding:0; background:var(--bg);
+    display:flex; flex-direction:column; border-radius:0; }}
+  figure:fullscreen .canvas {{ height:auto; flex:1 1 auto; min-height:0; border-radius:0; border-left:0; border-right:0; }}
+  figure:fullscreen figcaption {{ padding:8px 16px; }}
   /* overflow:visible so a box dragged past the diagram's own bounds still paints;
      the frame that clips is .canvas, not the svg viewport. */
   .canvas svg {{ position:absolute; left:0; top:0; transform-origin:0 0; display:block; overflow:visible; }}
@@ -642,7 +646,8 @@ class Flow:
       <button type="button" data-zoom="one">100 %</button>
       <button type="button" data-zoom="fit">Ajuster</button>
       <button type="button" data-act="reset" id="reset">Réinitialiser</button>
-      <span class="tip">cliquer une boîte : son code · ◎ : isoler son sous-flux · × : la retirer avec ce qui en dépend · glisser pour déplacer · Ctrl + molette : zoom</span>
+      <button type="button" data-act="full" id="full">Plein écran</button>
+      <span class="tip">cliquer une boîte : son code · ◎ : isoler son sous-flux · × : la retirer avec ce qui en dépend · glisser pour déplacer · Ctrl + molette : zoom · plein écran</span>
     </div>
     <div class="canvas" id="canvas">{self.svg()}</div>
     {f'<figcaption>{rich(d.get("caption"))}</figcaption>' if d.get("caption") else ""}</figure>
@@ -846,8 +851,19 @@ class Flow:
     }});
     OFF = {{}}; rerouteAll(); one();
   }}
+  var fig = canvas.closest('figure'), fullBtn = document.getElementById('full');
+  function toggleFull() {{
+    if (document.fullscreenElement) {{ if (document.exitFullscreen) document.exitFullscreen(); }}
+    else if (fig.requestFullscreen) {{ var r = fig.requestFullscreen(); if (r && r.catch) r.catch(function () {{}}); }}
+  }}
+  document.addEventListener('fullscreenchange', function () {{
+    var on = document.fullscreenElement === fig;
+    fullBtn.textContent = on ? 'Quitter le plein écran' : 'Plein écran';
+    apply();
+  }});
   document.querySelectorAll('.bar button').forEach(function (b) {{
     b.addEventListener('click', function () {{
+      if (b.getAttribute('data-act') === 'full') {{ toggleFull(); return; }}
       if (b.getAttribute('data-act') === 'reset') {{ resetAll(); return; }}
       var z = b.getAttribute('data-zoom');
       if (z === 'in') setZoom(k * 1.25); else if (z === 'out') setZoom(k / 1.25); else if (z === 'fit') fit(); else one();
@@ -922,7 +938,9 @@ class Flow:
       if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); e.stopPropagation(); drop(el.getAttribute('data-del')); }}
     }});
   }});
-  window.addEventListener('keydown', function (e) {{ if (e.key === 'Escape' && !dlg.open && isoId) clearIso(); }});
+  window.addEventListener('keydown', function (e) {{
+    if (e.key === 'Escape' && !dlg.open && !document.fullscreenElement && isoId) clearIso();
+  }});
   document.getElementById('dlg-close').addEventListener('click', function () {{ dlg.close(); }});
   dlg.addEventListener('click', function (e) {{ if (e.target === dlg) dlg.close(); }});
 }})();

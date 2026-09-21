@@ -20,9 +20,11 @@ to have incoming edges and has none left, or used to have outgoing ones and has 
 removal cascading until it settles; origins and effects keep the side they never had. **A box can
 also be dragged** to pull apart edge labels that sit on top of each other; its wires follow. The
 diagram sits in a full-width canvas at 1:1 (the text keeps its size whatever the diagram's width),
-panned by dragging the background and zoomed with Ctrl + wheel or the toolbar, and a
-**Réinitialiser** button puts every box back, clears the isolation and returns to 100 %. The page
-embeds the repository's code verbatim: it stays a local file, never published or uploaded.
+panned by dragging the background — without bounds, the diagram may be taken clean off the frame —
+and zoomed with Ctrl + wheel or the toolbar. A **Réinitialiser** button puts every box back, clears
+the isolation and returns to 100 %, and a **Plein écran** button gives the canvas the whole screen,
+toolbar included. The page embeds the repository's code verbatim: it stays a local file, never
+published or uploaded.
 
 ## The rules carried over from `pr-brief` — all of them apply
 
