@@ -27,7 +27,7 @@ NODE_GAP, PAD = 10, 10
 LINE_H, TITLE_H = 16, 20
 TITLE_EXTRA_H = 18          # each wrapped title line after the first
 NONE_STUB_W = 90            # stub + ∅ circle of a `none` edge; its label is drawn inside the box
-CUE_W = 62                  # room kept free of the title for the cue and the isolate handle
+CUE_W = 80                  # room kept free of the title for the cue and the two handles
 LABEL_STAGGER = 13          # several labels sharing one anchor are stacked by this much
 
 # Estimated advance width per character, by text class, in px. SVG text cannot wrap by
@@ -232,12 +232,18 @@ class Flow:
             out.append(f'<text class="{lcls}" x="{x + 10}" y="{ty}">{esc(piece)}</text>')
             ty += LINE_H
         if has_modal:
-            out.append(f'<text class="cue" x="{x + w - 30}" y="{y + 12}" text-anchor="end">{esc(cue)} ›</text>')
+            out.append(f'<text class="cue" x="{x + w - 48}" y="{y + 12}" text-anchor="end">{esc(cue)} ›</text>')
         title_txt = esc(node.get("title") or node["id"])
+        ix, dx2, hy = x + w - 31, x + w - 13, y + 11
         out.append(f'<g class="iso" data-iso="{esc(node["id"])}" role="button" tabindex="0" '
                    f'aria-label="Isoler le sous-flux : {title_txt}">'
-                   f'<circle class="isob" cx="{x + w - 13}" cy="{y + 11}" r="7.5"/>'
-                   f'<circle class="isod" cx="{x + w - 13}" cy="{y + 11}" r="2.6"/></g>')
+                   f'<circle class="isob" cx="{ix}" cy="{hy}" r="7.5"/>'
+                   f'<circle class="isod" cx="{ix}" cy="{hy}" r="2.6"/></g>')
+        out.append(f'<g class="del" data-del="{esc(node["id"])}" role="button" tabindex="0" '
+                   f'aria-label="Retirer du schéma : {title_txt}">'
+                   f'<circle class="delb" cx="{dx2}" cy="{hy}" r="7.5"/>'
+                   f'<path class="delx" d="M{dx2 - 3.4} {hy - 3.4} l6.8 6.8 M{dx2 + 3.4} {hy - 3.4} l-6.8 6.8"/>'
+                   f'</g>')
         label = esc(node.get("modal_title") or node.get("title") or node["id"])
         aria = f"Ouvrir le code : {label}" if has_modal else label
         modal = ' data-modal="1"' if has_modal else ""
@@ -293,7 +299,8 @@ class Flow:
                 mx = int(edge.get("elbow_x") or self.default_elbow(edge, sx, ex))
                 my = (sy + ty) // 2 + dy
                 parts.append(f'<path class="{cls}" d="{d}" marker-end="{marker}"/>')
-                parts.append(f'<text class="lab {esc(tone) if tone in self.tones else ""}" x="{mx + 6}" y="{my}" '
+                lab_cls = f"lab {esc(tone)}" if tone in self.tones else "lab"
+                parts.append(f'<text class="{lab_cls}" x="{mx + 6}" y="{my}" '
                              f'transform="rotate(-90 {mx + 6} {my})" text-anchor="middle">{esc(label)}</text>')
                 return "".join(parts)
         elif bx + bw <= ax:  # right -> left
@@ -508,15 +515,15 @@ class Flow:
 <style>
   :root {{ --bg:#f3f5f8; --surface:#fff; --ink:#1a222d; --muted:#5d6877; --line:#c9d0da; --off:#9aa3ae;
           --note:#fbf5e6; --note-line:#d9c48a; --add-bg:#e4f3e8; --del-bg:#fbe7e4; --hl-bg:#fff1bf; --code-bg:#f7f8fa;
-          --focus:#0e6f8e; {light} }}
+          --focus:#0e6f8e; --danger:#a3271d; {light} }}
   @media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{
     --bg:#10151c; --surface:#181f28; --ink:#e5eaf1; --muted:#9aa6b5; --line:#35404d; --off:#6b7580;
     --note:#2a2517; --note-line:#6b5a2a; --add-bg:#17301f; --del-bg:#3a1d1a; --hl-bg:#3b3312; --code-bg:#121820;
-    --focus:#57b8d6; {dark} }} }}
+    --focus:#57b8d6; --danger:#e08b82; {dark} }} }}
   :root[data-theme="dark"] {{
     --bg:#10151c; --surface:#181f28; --ink:#e5eaf1; --muted:#9aa6b5; --line:#35404d; --off:#6b7580;
     --note:#2a2517; --note-line:#6b5a2a; --add-bg:#17301f; --del-bg:#3a1d1a; --hl-bg:#3b3312; --code-bg:#121820;
-    --focus:#57b8d6; {dark} }}
+    --focus:#57b8d6; --danger:#e08b82; {dark} }}
   * {{ box-sizing:border-box; }}
   body {{ margin:0; background:var(--bg); color:var(--ink); font-family:"IBM Plex Sans","Helvetica Neue",Arial,sans-serif; font-size:15px; line-height:1.5; }}
   code {{ font-family:"IBM Plex Mono","SFMono-Regular",Menlo,monospace; font-size:.92em; }}
@@ -565,8 +572,13 @@ class Flow:
   g.node:focus-visible .box {{ stroke:var(--focus); }}
   g.node .cue {{ fill:var(--muted); font-size:9px; opacity:0; transition:opacity .12s; }}
   g.node:hover .cue, g.node:focus-visible .cue {{ opacity:1; }}
-  g.node .iso {{ cursor:pointer; opacity:.4; transition:opacity .12s; }}
-  g.node:hover .iso, g.node:focus-visible .iso, g.node.iso-on .iso, .iso:focus-visible {{ opacity:1; }}
+  g.node .iso, g.node .del {{ cursor:pointer; opacity:.4; transition:opacity .12s; }}
+  g.node:hover .iso, g.node:focus-visible .iso, g.node.iso-on .iso, .iso:focus-visible,
+  g.node:hover .del, g.node:focus-visible .del, .del:focus-visible {{ opacity:1; }}
+  .delb {{ fill:var(--surface); stroke:var(--muted); stroke-width:1.2; }}
+  .delx {{ fill:none; stroke:var(--muted); stroke-width:1.4; stroke-linecap:round; }}
+  .del:hover .delb {{ stroke:var(--danger); }} .del:hover .delx {{ stroke:var(--danger); }}
+  g.node.gone, g.ew.gone {{ display:none; }}
   .isob {{ fill:var(--surface); stroke:var(--muted); stroke-width:1.2; }}
   .isod {{ fill:var(--muted); }}
   .iso:hover .isob, g.node.iso-on .isob {{ stroke:var(--focus); }}
@@ -628,7 +640,7 @@ class Flow:
       <button type="button" data-zoom="one">100 %</button>
       <button type="button" data-zoom="fit">Ajuster</button>
       <button type="button" data-act="reset" id="reset">Réinitialiser</button>
-      <span class="tip">cliquer une boîte : son code · la cible ◎ : isoler son sous-flux · glisser une boîte pour la déplacer · Ctrl + molette : zoom</span>
+      <span class="tip">cliquer une boîte : son code · ◎ : isoler son sous-flux · × : la retirer avec ce qui en dépend · glisser pour déplacer · Ctrl + molette : zoom</span>
     </div>
     <div class="canvas" id="canvas">{self.svg()}</div>
     {f'<figcaption>{rich(d.get("caption"))}</figcaption>' if d.get("caption") else ""}</figure>
@@ -724,13 +736,55 @@ class Flow:
   }}
   function rerouteAll() {{ EDGES.forEach(function (e, i) {{ if (edgeEls[i]) edgeEls[i].innerHTML = edgeHTML(e); }}); }}
 
-  /* ---- subflow: everything that leads to a box and everything it reaches ---- */
-  var FWD = {{}}, BWD = {{}};
+  /* ---- removal: a box goes, and with it whatever no longer has a reason to be drawn.
+     A box is dropped when it used to have incoming edges and has none left (nothing reaches
+     it any more), or used to have outgoing edges and has none left (it leads nowhere). Boxes
+     that never had one side keep their place: origins have no input, effects no output. ---- */
+  var GONE = {{}}, ORIG_IN = {{}}, ORIG_OUT = {{}};
   EDGES.forEach(function (e) {{
-    if (!e.to) return;
-    (FWD[e.from] = FWD[e.from] || []).push(e.to);
-    (BWD[e.to] = BWD[e.to] || []).push(e.from);
+    ORIG_OUT[e.from] = (ORIG_OUT[e.from] || 0) + 1;
+    if (e.to) ORIG_IN[e.to] = (ORIG_IN[e.to] || 0) + 1;
   }});
+  function edgeAlive(e) {{ return !GONE[e.from] && !(e.to && GONE[e.to]); }}
+  function cascade() {{
+    var moved = true;
+    while (moved) {{
+      moved = false;
+      Object.keys(nodeEls).forEach(function (n) {{
+        if (GONE[n]) return;
+        var inn = 0, out = 0;
+        EDGES.forEach(function (e) {{
+          if (!edgeAlive(e)) return;
+          if (e.to === n) inn++;
+          if (e.from === n) out++;
+        }});
+        if ((ORIG_IN[n] > 0 && inn === 0) || (ORIG_OUT[n] > 0 && out === 0)) {{ GONE[n] = 1; moved = true; }}
+      }});
+    }}
+  }}
+  function paintGone() {{
+    Object.keys(nodeEls).forEach(function (n) {{ nodeEls[n].classList.toggle('gone', !!GONE[n]); }});
+    EDGES.forEach(function (e, i) {{ if (edgeEls[i]) edgeEls[i].classList.toggle('gone', !edgeAlive(e)); }});
+  }}
+  function drop(id) {{
+    if (GONE[id]) return;
+    GONE[id] = 1; cascade(); paintGone();
+    if (isoId) {{
+      if (GONE[isoId]) {{ clearIso(); }}
+      else {{ var keep = isoId; clearIso(); isolate(keep); }}
+    }}
+  }}
+
+  /* ---- subflow: everything that leads to a box and everything it reaches ---- */
+  function adjacency() {{
+    var f = {{}}, b = {{}};
+    EDGES.forEach(function (e) {{
+      if (!e.to || !edgeAlive(e)) return;
+      (f[e.from] = f[e.from] || []).push(e.to);
+      (b[e.to] = b[e.to] || []).push(e.from);
+    }});
+    return [f, b];
+  }}
   function reach(id, map) {{
     var seen = {{}}, stack = [id];
     while (stack.length) {{
@@ -748,10 +802,10 @@ class Flow:
   function isolate(id) {{
     if (isoId === id) {{ clearIso(); return; }}
     clearIso(); isoId = id;
-    var set = {{}}; set[id] = 1;
-    Object.keys(reach(id, FWD)).forEach(function (n) {{ set[n] = 1; }});
-    Object.keys(reach(id, BWD)).forEach(function (n) {{ set[n] = 1; }});
-    Object.keys(nodeEls).forEach(function (n) {{ if (!set[n]) nodeEls[n].classList.add('dim'); }});
+    var ab = adjacency(), set = {{}}; set[id] = 1;
+    Object.keys(reach(id, ab[0])).forEach(function (n) {{ set[n] = 1; }});
+    Object.keys(reach(id, ab[1])).forEach(function (n) {{ set[n] = 1; }});
+    Object.keys(nodeEls).forEach(function (n) {{ if (!set[n] && !GONE[n]) nodeEls[n].classList.add('dim'); }});
     if (nodeEls[id]) nodeEls[id].classList.add('iso-on');
     EDGES.forEach(function (e, i) {{
       var keep = e.to ? (set[e.from] && set[e.to]) : !!set[e.from];
@@ -780,6 +834,7 @@ class Flow:
   function one() {{ k = 1; tx = ty = 0; center(); apply(); }}
   function resetAll() {{
     clearIso();
+    GONE = {{}}; paintGone();
     Object.keys(OFF).forEach(function (id) {{
       var g = nodeEls[id];
       if (g) {{ g.setAttribute('transform', 'translate(0,0)'); g.classList.remove('moved'); }}
@@ -807,7 +862,7 @@ class Flow:
   document.addEventListener('pointerdown', function () {{ dragged = false; }}, true);
   canvas.addEventListener('pointerdown', function (e) {{
     if (e.button !== 0) return;
-    if (e.target.closest('.iso')) return;
+    if (e.target.closest('.iso') || e.target.closest('.del')) return;
     var g = e.target.closest('g.node');
     if (g) {{
       var id = g.getAttribute('data-node'), o = offOf(id);
@@ -854,6 +909,12 @@ class Flow:
     el.addEventListener('click', function (e) {{ e.stopPropagation(); if (dragged) return; isolate(el.getAttribute('data-iso')); }});
     el.addEventListener('keydown', function (e) {{
       if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); e.stopPropagation(); isolate(el.getAttribute('data-iso')); }}
+    }});
+  }});
+  document.querySelectorAll('.del').forEach(function (el) {{
+    el.addEventListener('click', function (e) {{ e.stopPropagation(); if (dragged) return; drop(el.getAttribute('data-del')); }});
+    el.addEventListener('keydown', function (e) {{
+      if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); e.stopPropagation(); drop(el.getAttribute('data-del')); }}
     }});
   }});
   window.addEventListener('keydown', function (e) {{ if (e.key === 'Escape' && !dlg.open && isoId) clearIso(); }});
