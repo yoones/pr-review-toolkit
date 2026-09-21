@@ -938,9 +938,16 @@ class Flow:
       if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); e.stopPropagation(); drop(el.getAttribute('data-del')); }}
     }});
   }});
+  /* Escape is claimed by three things: the code dialog, fullscreen and the isolation.
+     Taken in the capture phase and cancelled, so the browser's own close requests — the
+     dialog's and fullscreen's — are both suppressed and the order below is the one that
+     applies, whatever the browser would otherwise arbitrate. */
   window.addEventListener('keydown', function (e) {{
-    if (e.key === 'Escape' && !dlg.open && !document.fullscreenElement && isoId) clearIso();
-  }});
+    if (e.key !== 'Escape') return;
+    if (dlg.open) {{ e.preventDefault(); e.stopPropagation(); dlg.close(); return; }}
+    if (document.fullscreenElement) return;   /* nothing of ours to close: let it leave fullscreen */
+    if (isoId) clearIso();
+  }}, true);
   document.getElementById('dlg-close').addEventListener('click', function () {{ dlg.close(); }});
   dlg.addEventListener('click', function (e) {{ if (e.target === dlg) dlg.close(); }});
 }})();
